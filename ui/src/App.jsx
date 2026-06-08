@@ -24,16 +24,23 @@ function createLocalRepo() {
   };
   const get = async (key, def) => {
     try {
-      if (!window.storage) return def;
-      const r = await window.storage.get(key);
-      return r ? JSON.parse(r.value) : def;
+      if (typeof window !== "undefined" && window.storage) {
+        const r = await window.storage.get(key);
+        return r ? JSON.parse(r.value) : def;
+      }
+      const r = localStorage.getItem(key);          // navegador: persiste entre recarregamentos
+      return r ? JSON.parse(r) : def;
     } catch {
       return def;
     }
   };
   const set = async (key, val) => {
     try {
-      if (window.storage) await window.storage.set(key, JSON.stringify(val));
+      if (typeof window !== "undefined" && window.storage) {
+        await window.storage.set(key, JSON.stringify(val));
+      } else {
+        localStorage.setItem(key, JSON.stringify(val));
+      }
     } catch (e) {
       console.error("storage", e);
     }
@@ -446,6 +453,7 @@ export default function App() {
             nameLabel="Ingrediente"
             seed={ing.length === 0 ? loadSeed : null}
             usageOf={ingredientUsage}
+            onDirty={setUnsaved}
           />
         )}
         {view === "embalagens" && (
@@ -457,6 +465,7 @@ export default function App() {
             nameLabel="Embalagem"
             seed={emb.length === 0 ? loadSeed : null}
             usageOf={packagingUsage}
+            onDirty={setUnsaved}
           />
         )}
         {view === "parametros" && (
@@ -643,7 +652,7 @@ function Inicio({ ing, emb, par, prod, cfg, costPerMinute, goTo, onEditProduct }
 /* ------------------------------------------------------------------ */
 /*  CADASTRO genérico (ingredientes / embalagens)                      */
 /* ------------------------------------------------------------------ */
-function Cadastro({ title, icon, data, save, unitOptions, qtyLabel, nameLabel, seed, usageOf }) {
+function Cadastro({ title, icon, data, save, unitOptions, qtyLabel, nameLabel, seed, usageOf, onDirty }) {
   const notify = useNotify();
   const isIng = title === "Ingredientes";
   const blank = { name: "", packageValue: "", packageQty: "", unit: unitOptions[0] };
@@ -653,6 +662,14 @@ function Cadastro({ title, icon, data, save, unitOptions, qtyLabel, nameLabel, s
   const [rowDraft, setRowDraft] = useState(null);
   const [errors, setErrors] = useState({});
   const [rowErrors, setRowErrors] = useState({});
+
+  /* alterações não salvas: linha em edição com mudanças, ou formulário preenchido */
+  const rowDirty =
+    editingId != null && rowDraft != null &&
+    JSON.stringify(rowDraft) !== JSON.stringify(data.find((x) => x.id === editingId) || {});
+  const formDirty = !!(String(form.name).trim() || String(form.packageValue).trim() || String(form.packageQty).trim());
+  const dirty = rowDirty || formDirty;
+  useEffect(() => { onDirty && onDirty(dirty); return () => onDirty && onDirty(false); }, [dirty]);
 
   /* formata um valor monetário para o padrão BR com 2 casas: "100" -> "100,00" */
   const moneyFmt = money2;

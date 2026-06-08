@@ -40,9 +40,9 @@ sessões na tabela `sessions` (token aleatório com validade de 30 dias). Ver `s
 | POST | `/auth/logout` | pronto |
 | GET  | `/auth/me` | pronto |
 | GET/POST | `/api/users` (só a dona) | pronto |
-| GET  | `/api/state` | TODO (protegida) |
-| PUT  | `/api/ingredients`, `/api/packaging`, `/api/parameters`, `/api/products`, `/api/config` | TODO (protegidas) |
-| POST | `/api/import` (migração do backup JSON) | TODO (protegida) |
+| GET  | `/api/state` | pronto |
+| PUT  | `/api/ingredients`, `/api/packaging`, `/api/parameters`, `/api/products`, `/api/config` | pronto |
+| POST | `/api/import` (migração do backup JSON) | pronto |
 
 As rotas de dados validam com `@doceria/pricing-core` antes de gravar, e a gravação
 de produtos registra um instantâneo em `price_history`.

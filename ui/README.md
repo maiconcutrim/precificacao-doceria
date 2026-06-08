@@ -23,6 +23,8 @@ dados é trocar a implementação num único ponto.
 - `src/data-store.js` — implementação de **produção** (`createApiStore`), que fala
   com a API local do servidor.
 - No protótipo, `App.jsx` traz um repositório local interno (`createLocalRepo`).
+  Rodando no navegador (dev), ele persiste os dados em `localStorage`, então o que
+  você cadastrar continua lá entre recarregamentos.
 
 ## Pendências de integração (Fase 1)
 
