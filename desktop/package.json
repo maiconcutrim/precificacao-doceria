@@ -1,0 +1,38 @@
+{
+  "name": "@doceria/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Empacotamento do app de desktop (Windows). Sobe o servidor local e abre a interface.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron .",
+    "build": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.2.1"
+  },
+  "build": {
+    "appId": "com.doceria.precificacao",
+    "productName": "Precificacao Doceria",
+    "files": [
+      "main.js",
+      "preload.js",
+      "../server/**/*",
+      "../pricing-core/**/*",
+      "../ui/dist/**/*",
+      "!**/node_modules/*/{test,__tests__,tests}/**"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "publish": null
+  }
+}

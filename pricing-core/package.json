@@ -1,0 +1,10 @@
+{
+  "name": "@doceria/pricing-core",
+  "version": "0.1.0",
+  "description": "Núcleo de precificação compartilhado (cliente + servidor) — lógica pura, sem dependências.",
+  "type": "module",
+  "main": "index.js",
+  "exports": "./index.js",
+  "license": "UNLICENSED",
+  "private": true
+}

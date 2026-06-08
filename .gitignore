@@ -1,0 +1,37 @@
+# dependências
+node_modules/
+
+# builds / saídas
+dist/
+build/
+out/
+release/
+*.tsbuildinfo
+
+# Electron empacotado
+desktop/dist/
+desktop/out/
+
+# banco de dados local (cada instalação tem o seu)
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+
+# ambiente / segredos
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+
+# sistema operacional / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

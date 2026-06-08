@@ -1,0 +1,20 @@
+{
+  "name": "precificacao-doceria",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sistema de precificação para confeitarias — app de desktop auto-hospedado (Windows), servindo na rede local da loja.",
+  "workspaces": [
+    "pricing-core",
+    "ui",
+    "server",
+    "desktop"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev:ui": "npm run dev --workspace ui",
+    "dev:server": "npm run dev --workspace server",
+    "dev:desktop": "npm run dev --workspace desktop"
+  }
+}
