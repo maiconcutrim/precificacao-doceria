@@ -4,67 +4,48 @@ import {
   Save, FolderOpen, ChefHat, TrendingUp, Tag, Percent, Clock,
   X, Check, Sparkles, Layers, FileText, Printer,
   Settings, Upload, Building2, Pencil, Search,
-  Copy, Download, AlertTriangle, ArrowUpDown, Receipt, ChevronDown, Home,
+  Copy, Download, AlertTriangle, ArrowUpDown, Receipt, ChevronDown, Home, LogOut,
 } from "lucide-react";
+import { createApiStore } from "./data-store.js";
+import {
+  n, money2, maskPhone, unitCost, ROUNDING_OPTIONS,
+  computeProduct, costPerMinute as calcCostPerMinute, WEEKS_PER_MONTH, MARGIN_MAX,
+} from "@doceria/pricing-core";
 
 /* ------------------------------------------------------------------ */
-/*  CAMADA DE DADOS (repositório)                                      */
-/*  Todo o acesso a persistência passa por AQUI. A interface é de       */
-/*  domínio (loadAll / saveIngredients / ...). Hoje a implementação usa  */
-/*  window.storage; na versão de servidor, basta trocar `repo` por uma   */
-/*  implementação que fala com a API — nenhum componente muda.           */
+/*  CAMADA DE DADOS + AUTENTICAÇÃO                                     */
+/*  A interface fala com a API local do servidor. Em desenvolvimento o  */
+/*  Vite serve em :5173 e o servidor em :4317; empacotado, é a mesma     */
+/*  origem (o servidor serve a interface).                               */
 /* ------------------------------------------------------------------ */
-function createLocalRepo() {
-  const KEY = {
-    ingredients: "palha:ingredientes",
-    packaging: "palha:embalagens",
-    parameters: "palha:parametros",
-    products: "palha:produtos",
-    config: "palha:config",
-  };
-  const get = async (key, def) => {
-    try {
-      if (typeof window !== "undefined" && window.storage) {
-        const r = await window.storage.get(key);
-        return r ? JSON.parse(r.value) : def;
-      }
-      const r = localStorage.getItem(key);          // navegador: persiste entre recarregamentos
-      return r ? JSON.parse(r) : def;
-    } catch {
-      return def;
-    }
-  };
-  const set = async (key, val) => {
-    try {
-      if (typeof window !== "undefined" && window.storage) {
-        await window.storage.set(key, JSON.stringify(val));
-      } else {
-        localStorage.setItem(key, JSON.stringify(val));
-      }
-    } catch (e) {
-      console.error("storage", e);
-    }
-  };
-  return {
-    async loadAll() {
-      return {
-        ingredients: await get(KEY.ingredients, []),
-        packaging: await get(KEY.packaging, []),
-        parameters: await get(KEY.parameters, null),
-        products: await get(KEY.products, []),
-        config: await get(KEY.config, null),
-      };
-    },
-    saveIngredients: (v) => set(KEY.ingredients, v),
-    savePackaging: (v) => set(KEY.packaging, v),
-    saveParameters: (v) => set(KEY.parameters, v),
-    saveProducts: (v) => set(KEY.products, v),
-    saveConfig: (v) => set(KEY.config, v),
-  };
+const ORIGIN =
+  typeof location !== "undefined" && location.port === "5173"
+    ? "http://localhost:4317"
+    : "";
+const API_BASE = ORIGIN + "/api";
+const TOKEN_KEY = "doceria:token";
+
+const getToken = () => {
+  try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
+};
+const setToken = (t) => {
+  try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {}
+};
+
+/* chamadas de autenticação (rotas /auth, fora de /api) */
+async function authCall(path, { method = "GET", body, token } = {}) {
+  const headers = {};
+  if (body) headers["Content-Type"] = "application/json";
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(ORIGIN + path, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = res.status === 204 ? null : await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data && data.error) || `Erro ${res.status}`);
+  return data;
 }
-
-/* ponto único de troca: localmente usa window.storage; depois, a API */
-const repo = createLocalRepo();
 
 
 /* ------------------------------------------------------------------ */
@@ -72,15 +53,6 @@ const repo = createLocalRepo();
 /* ------------------------------------------------------------------ */
 const uid = () =>
   (crypto?.randomUUID?.() || String(Date.now() + Math.random()));
-const n = (v) => {
-  if (typeof v === "number") return isFinite(v) ? v : 0;
-  let s = String(v).trim().replace(/[^\d.,-]/g, "");
-  if (!s) return 0;
-  // padrão BR: vírgula = decimal, ponto = separador de milhar
-  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
-  const x = parseFloat(s);
-  return isNaN(x) ? 0 : x;
-};
 const brl = (v) =>
   (isFinite(v) ? v : 0).toLocaleString("pt-BR", {
     style: "currency",
@@ -88,28 +60,11 @@ const brl = (v) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-/* formata um valor digitado para o padrão BR com 2 casas: "100" -> "100,00" ("" permanece vazio) */
-const money2 = (v) => {
-  const s = String(v ?? "").trim();
-  if (s === "") return "";
-  return n(s).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-};
-/* máscara de telefone/WhatsApp BR: somente dígitos, formato (98) 90000-0000 */
-const maskPhone = (v) => {
-  const d = String(v ?? "").replace(/\D/g, "").slice(0, 11);
-  if (d.length === 0) return "";
-  if (d.length <= 2) return `(${d}`;
-  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
-  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
-  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
-};
 const pct = (v) =>
   (isFinite(v) ? v * 100 : 0).toLocaleString("pt-BR", {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   }) + "%";
-const unitCost = (item) =>
-  item && n(item.packageQty) ? n(item.packageValue) / n(item.packageQty) : 0;
 
 /* ------------------------------------------------------------------ */
 /*  NOTIFICAÇÕES (toasts globais)                                      */
@@ -128,87 +83,6 @@ function ToastViewport({ toasts }) {
       ))}
     </div>
   );
-}
-
-/* arredondamento comercial do preço sugerido */
-function roundPrice(v, mode) {
-  if (!v || !isFinite(v)) return 0;
-  const eps = 1e-9;
-  if (mode === "0.10" || mode === "0.50" || mode === "1") {
-    const step = parseFloat(mode);
-    const r = Math.round(v / step) * step;
-    return r > 0 ? r : step; // nunca zera um preço positivo
-  }
-  if (mode === "0.90" || mode === "0.99") {
-    const end = mode === "0.90" ? 0.9 : 0.99;
-    let base = Math.floor(v);
-    let cand = base + end;
-    if (cand < v - eps) cand += 1;
-    return cand;
-  }
-  return v; // none
-}
-const ROUNDING_OPTIONS = [
-  { v: "none", label: "Não arredondar" },
-  { v: "0.10", label: "Múltiplo de R$ 0,10" },
-  { v: "0.50", label: "Múltiplo de R$ 0,50" },
-  { v: "1", label: "Múltiplo de R$ 1,00" },
-  { v: "0.90", label: "Terminar em ,90" },
-  { v: "0.99", label: "Terminar em ,99" },
-];
-
-/* cálculo de precificação reutilizável (tela de precificar + catálogo + ficha) */
-function computeProduct(p, { ing, emb, par, costPerMinute }) {
-  const ingById = (id) => ing.find((x) => x.id === id);
-  const embById = (id) => emb.find((x) => x.id === id);
-  const ingredientRows = (p.items || []).map((it) => {
-    const g = ingById(it.ingredientId);
-    if (!g) return null;
-    const u = unitCost(g);
-    return { name: g.name, qty: n(it.qty), unit: g.unit, unitCost: u, total: u * n(it.qty) };
-  }).filter(Boolean);
-  const packRows = (p.packs || []).map((pk) => {
-    const g = embById(pk.packagingId);
-    if (!g) return null;
-    const u = unitCost(g);
-    return { name: g.name, qty: n(pk.qty), unit: g.unit, unitCost: u, total: u * n(pk.qty) };
-  }).filter(Boolean);
-
-  const ingredientsCost = ingredientRows.reduce((s, r) => s + r.total, 0);
-  const packPerUnit = packRows.reduce((s, r) => s + r.total, 0);
-  const yld = n(p.yield);
-  const totalInsumosEmb = ingredientsCost + packPerUnit * yld;
-  const laborFixed = n(p.minutes) * costPerMinute;
-  const totalRecipe = laborFixed + totalInsumosEmb;
-  const costPerUnit = yld ? totalRecipe / yld : 0;
-  /* markup = margem SOBRE O PREÇO de venda. Margem limitada a [0, 99,9%] para
-     evitar markup negativo/infinito (margem >= 100% é matematicamente impossível). */
-  const rawMargin = n(par.marginPct);
-  const effMargin = Math.min(Math.max(rawMargin, 0), 99.9);
-  const markup = 100 / (100 - effMargin);
-  const suggestedUnitRaw = yld ? (totalRecipe * markup) / yld : 0;
-  const suggestedUnit = roundPrice(suggestedUnitRaw, par.rounding || "none");
-  const suggestedRecipe = suggestedUnit * yld;
-  const sale = n(p.salePrice);
-  const realMargin = sale ? (sale - costPerUnit) / sale : 0;
-  const profit = sale ? sale - costPerUnit : 0;
-  const disc = Math.min(Math.max(n(p.discountPct) / 100, 0), 1); // desconto entre 0% e 100%
-  const resalePrice = sale ? sale - sale * disc : 0;
-  const resaleMargin = resalePrice ? (resalePrice - costPerUnit) / resalePrice : 0;
-  const resaleProfit = resalePrice ? resalePrice - costPerUnit : 0;
-
-  /* cenários a sinalizar */
-  const orphanIng = (p.items || []).filter((it) => it.ingredientId && !ingById(it.ingredientId)).length;
-  const orphanPack = (p.packs || []).filter((pk) => pk.packagingId && !embById(pk.packagingId)).length;
-
-  return {
-    ingredientRows, packRows, ingredientsCost, packPerUnit, yld, totalInsumosEmb,
-    laborFixed, totalRecipe, costPerUnit, suggestedRecipe, suggestedUnit, suggestedUnitRaw,
-    sale, realMargin, profit, resalePrice, resaleMargin, resaleProfit,
-    costPerMinute, minutes: n(p.minutes), marginPct: effMargin, rawMargin,
-    marginInvalid: rawMargin >= 100 || rawMargin < 0,
-    discountPct: n(p.discountPct), fees: par.fees, orphanIng, orphanPack,
-  };
 }
 
 const CONFIG_DEFAULT = {
@@ -296,9 +170,127 @@ const SEED = {
 };
 
 /* ================================================================== */
-/*  APP                                                                */
+/*  RAIZ — autenticação (login / primeiro acesso) protege o app        */
 /* ================================================================== */
-export default function App() {
+export default function Root() {
+  const [phase, setPhase] = useState("loading"); // loading | setup | login | authed | offline
+  const [user, setUser] = useState(null);
+  const [token, setTokenState] = useState(getToken());
+  const [authError, setAuthError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const start = async () => {
+    setPhase("loading");
+    try {
+      const status = await authCall("/auth/status");
+      if (status.needsSetup) { setPhase("setup"); return; }
+      const t = getToken();
+      if (!t) { setPhase("login"); return; }
+      try {
+        const me = await authCall("/auth/me", { token: t });
+        setUser(me.user); setTokenState(t); setPhase("authed");
+      } catch {
+        setToken(null); setTokenState(null); setPhase("login");
+      }
+    } catch {
+      setPhase("offline");
+    }
+  };
+  useEffect(() => { start(); }, []);
+
+  const submit = async (mode, { username, password, displayName }) => {
+    setAuthError(""); setBusy(true);
+    try {
+      const path = mode === "setup" ? "/auth/register" : "/auth/login";
+      const r = await authCall(path, { method: "POST", body: { username, password, displayName } });
+      setToken(r.token); setTokenState(r.token); setUser(r.user); setPhase("authed");
+    } catch (e) {
+      setAuthError(e.message || "Não foi possível entrar.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onLogout = async () => {
+    try { await authCall("/auth/logout", { method: "POST", token: getToken() }); } catch {}
+    setToken(null); setTokenState(null); setUser(null); setPhase("login");
+  };
+  const onUnauthorized = () => { setToken(null); setTokenState(null); setUser(null); setPhase("login"); };
+
+  if (phase === "loading") return <Splash text="Conectando ao servidor…" />;
+  if (phase === "offline") return <Splash text="Não foi possível conectar ao servidor." action="Tentar de novo" onAction={start} />;
+  if (phase === "setup" || phase === "login")
+    return <AuthScreen mode={phase} onSubmit={submit} error={authError} busy={busy} />;
+  return <App token={token} user={user} onLogout={onLogout} onUnauthorized={onUnauthorized} />;
+}
+
+function Splash({ text, action, onAction }) {
+  return (
+    <>
+      <div className="splash">
+        <div className="splash-mark"><ChefHat size={30} /></div>
+        <p>{text}</p>
+        {action && <button className="btn primary" onClick={onAction}>{action}</button>}
+      </div>
+      <Style />
+    </>
+  );
+}
+
+function AuthScreen({ mode, onSubmit, error, busy }) {
+  const isSetup = mode === "setup";
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const submit = () => { if (!busy) onSubmit(mode, { username, password, displayName }); };
+  const onKey = (e) => { if (e.key === "Enter") submit(); };
+
+  return (
+    <>
+      <div className="auth-wrap">
+        <div className="auth-card">
+          <div className="auth-mark"><ChefHat size={28} /></div>
+          <div className="auth-brand">Ateliê de Preços</div>
+          <h1 className="auth-title">{isSetup ? "Bem-vinda!" : "Entrar"}</h1>
+          <p className="auth-sub">
+            {isSetup
+              ? "Crie a conta da dona para começar a usar o sistema nesta máquina."
+              : "Acesse com seu usuário e senha."}
+          </p>
+
+          {isSetup && (
+            <label className="auth-field">
+              <span>Seu nome</span>
+              <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} onKeyDown={onKey} placeholder="Ex.: Leandra" />
+            </label>
+          )}
+          <label className="auth-field">
+            <span>Usuário</span>
+            <input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={onKey} placeholder="Ex.: leandra" autoCapitalize="none" />
+          </label>
+          <label className="auth-field">
+            <span>Senha</span>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={onKey} placeholder={isSetup ? "Mínimo de 6 caracteres" : "Sua senha"} />
+          </label>
+
+          {error && <div className="auth-error"><AlertTriangle size={15} /><span>{error}</span></div>}
+
+          <button className="btn primary auth-submit" onClick={submit} disabled={busy}>
+            {busy ? "Aguarde…" : isSetup ? "Criar conta e entrar" : "Entrar"}
+          </button>
+
+          {isSetup && <p className="auth-foot">Sua conta e seus dados ficam guardados só nesta máquina.</p>}
+        </div>
+      </div>
+      <Style />
+    </>
+  );
+}
+
+/* ================================================================== */
+/*  APP (autenticado)                                                  */
+/* ================================================================== */
+function App({ token, user, onLogout, onUnauthorized }) {
   const [ready, setReady] = useState(false);
   const [view, setView] = useState("inicio");
   const [ing, setIng] = useState([]);
@@ -310,6 +302,11 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [unsaved, setUnsaved] = useState(false);   // rascunho pendente em Parâmetros/Configurações
   const [pendingView, setPendingView] = useState(null);
+
+  const repo = useMemo(
+    () => createApiStore({ baseUrl: API_BASE, getToken: () => token, onUnauthorized }),
+    [token, onUnauthorized]
+  );
 
   const notify = (type, text) => {
     const id = uid();
@@ -326,36 +323,42 @@ export default function App() {
   const confirmLeave = () => { setUnsaved(false); setView(pendingView); setPendingView(null); };
   const cancelLeave = () => { setPendingView(null); };
 
+  const loadState = async () => {
+    const d = await repo.loadAll();
+    setIng(d.ingredients || []);
+    setEmb(d.packaging || []);
+    setPar(d.parameters || PARAMS_DEFAULT);
+    setProd(d.products || []);
+    setCfg(withCfgDefaults(d.config));
+  };
+
   useEffect(() => {
     (async () => {
-      const d = await repo.loadAll();
-      setIng(d.ingredients || []);
-      setEmb(d.packaging || []);
-      setPar(d.parameters || PARAMS_DEFAULT);
-      setProd(d.products || []);
-      setCfg(withCfgDefaults(d.config));
-      setReady(true);
+      try { await loadState(); }
+      catch (e) { notify("warn", "Não foi possível carregar os dados: " + e.message); }
+      finally { setReady(true); }
     })();
   }, []);
 
-  const saveIng = (v) => { setIng(v); repo.saveIngredients(v); };
-  const saveEmb = (v) => { setEmb(v); repo.savePackaging(v); };
-  const savePar = (v) => { setPar(v); repo.saveParameters(v); };
-  const saveProd = (v) => { setProd(v); repo.saveProducts(v); };
-  const saveCfg = (v) => { setCfg(v); repo.saveConfig(v); };
+  /* gravação: atualização otimista + adoção da resposta do servidor; em erro, recarrega */
+  const persist = async (apply, saver, value) => {
+    apply(value);
+    try {
+      const saved = await saver(value);
+      if (saved) apply(saved);
+    } catch (e) {
+      notify("warn", e.message || "Erro ao salvar.");
+      try { await loadState(); } catch {}
+    }
+  };
+  const saveIng = (v) => persist(setIng, repo.saveIngredients, v);
+  const saveEmb = (v) => persist(setEmb, repo.savePackaging, v);
+  const savePar = (v) => persist(setPar, repo.saveParameters, v);
+  const saveProd = (v) => persist(setProd, repo.saveProducts, v);
+  const saveCfg = (v) => persist((x) => setCfg(withCfgDefaults(x)), repo.saveConfig, v);
 
-  /* custo total por minuto (mão de obra + custos fixos) */
-  const costPerMinute = useMemo(() => {
-    const monthlyH = n(par.hoursPerDay) * n(par.daysPerWeek) * 4.33;
-    const ownerH = monthlyH ? n(par.desiredEarnings) / monthlyH : 0;
-    const fixedTotal = (par.fixedCosts || []).reduce((s, f) => s + n(f.value), 0);
-    const fixedH = monthlyH ? fixedTotal / monthlyH : 0;
-    const empH = (par.employees || []).reduce((s, e) => {
-      const mh = n(e.hoursPerDay) * n(e.daysPerWeek) * 4.33;
-      return s + (mh ? n(e.salary) / mh : 0);
-    }, 0);
-    return (ownerH + fixedH + empH) / 60;
-  }, [par]);
+  /* custo total por minuto (mão de obra + custos fixos) — núcleo compartilhado */
+  const costPerMinute = useMemo(() => calcCostPerMinute(par), [par]);
 
   const loadSeed = () => { saveIng(SEED.ing); saveEmb(SEED.emb); };
 
@@ -386,20 +389,17 @@ export default function App() {
     notify("ok", "Backup exportado com sucesso.");
   };
 
-  /* BACKUP — importar de um arquivo JSON (substitui os dados atuais) */
+  /* BACKUP — importar de um arquivo JSON (envia ao servidor, que reconcilia tudo) */
   const importData = (file) =>
     new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         try {
           const parsed = JSON.parse(e.target.result);
           const d = parsed.data || parsed;
           if (!d || typeof d !== "object") throw new Error("Estrutura inválida");
-          if (d.ingredientes) saveIng(d.ingredientes);
-          if (d.embalagens) saveEmb(d.embalagens);
-          if (d.parametros) savePar(d.parametros);
-          if (d.produtos) saveProd(d.produtos);
-          if (d.config) saveCfg(withCfgDefaults(d.config));
+          await repo.importAll(parsed);   // o servidor importa na ordem correta, em transação
+          await loadState();              // recarrega o estado já reconciliado
           resolve();
         } catch (err) {
           reject(err);
@@ -419,7 +419,7 @@ export default function App() {
   return (
     <ToastContext.Provider value={notify}>
     <Shell>
-      <Header view={view} setView={requestView} cfg={cfg} />
+      <Header view={view} setView={requestView} cfg={cfg} user={user} onLogout={onLogout} />
       <main className="content">
         {view === "inicio" && (
           <Inicio
@@ -503,7 +503,7 @@ function Shell({ children }) {
   return <div className="app">{children}</div>;
 }
 
-function Header({ view, setView, cfg }) {
+function Header({ view, setView, cfg, user, onLogout }) {
   const tabs = [
     { id: "inicio", label: "Início", icon: <Home size={17} /> },
     { id: "precificar", label: "Precificar", icon: <Calculator size={17} /> },
@@ -536,6 +536,12 @@ function Header({ view, setView, cfg }) {
           </button>
         ))}
       </nav>
+      {user && (
+        <div className="user-box">
+          <span className="user-name" title={user.role === "owner" ? "Dona" : "Funcionária"}>{user.displayName || user.username}</span>
+          <button className="logout-btn" onClick={onLogout} title="Sair"><LogOut size={16} /></button>
+        </div>
+      )}
     </header>
   );
 }
@@ -544,7 +550,7 @@ function Header({ view, setView, cfg }) {
 /*  INÍCIO / RESUMO (dashboard)                                        */
 /* ------------------------------------------------------------------ */
 function Inicio({ ing, emb, par, prod, cfg, costPerMinute, goTo, onEditProduct }) {
-  const monthlyH = n(par.hoursPerDay) * n(par.daysPerWeek) * 4.33;
+  const monthlyH = n(par.hoursPerDay) * n(par.daysPerWeek) * WEEKS_PER_MONTH;
   const paramsOk = monthlyH > 0 && n(par.desiredEarnings) > 0;
 
   const steps = [
@@ -560,7 +566,7 @@ function Inicio({ ing, emb, par, prod, cfg, costPerMinute, goTo, onEditProduct }
   const inativos = prod.length - ativos;
 
   const flagged = prod
-    .map((p) => ({ p, calc: computeProduct(p, { ing, emb, par, costPerMinute }) }))
+    .map((p) => ({ p, calc: computeProduct(p, { ingredients: ing, packaging: emb, params: par, cpm: costPerMinute }) }))
     .map(({ p, calc }) => {
       let reason = null;
       if (calc.suggestedUnit <= 0) reason = "precificação incompleta";
@@ -838,19 +844,10 @@ function Parametros({ par, save, costPerMinute, onDirty }) {
   const up = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const dirty = JSON.stringify(draft) !== JSON.stringify(par);
   useEffect(() => { onDirty && onDirty(dirty); return () => onDirty && onDirty(false); }, [dirty]);
-  const monthlyH = n(draft.hoursPerDay) * n(draft.daysPerWeek) * 4.33;
+  const monthlyH = n(draft.hoursPerDay) * n(draft.daysPerWeek) * WEEKS_PER_MONTH;
 
   /* prévia ao vivo do custo por minuto (reflete o rascunho, ainda não salvo) */
-  const liveCPM = (() => {
-    const ownerH = monthlyH ? n(draft.desiredEarnings) / monthlyH : 0;
-    const fixedTotal = (draft.fixedCosts || []).reduce((s, f) => s + n(f.value), 0);
-    const fixedH = monthlyH ? fixedTotal / monthlyH : 0;
-    const empH = (draft.employees || []).reduce((s, e) => {
-      const mh = n(e.hoursPerDay) * n(e.daysPerWeek) * 4.33;
-      return s + (mh ? n(e.salary) / mh : 0);
-    }, 0);
-    return (ownerH + fixedH + empH) / 60;
-  })();
+  const liveCPM = calcCostPerMinute(draft);
 
   const editList = (list, id, field, val) =>
     draft[list].map((x) => (x.id === id ? { ...x, [field]: val } : x));
@@ -865,7 +862,7 @@ function Parametros({ par, save, costPerMinute, onDirty }) {
 
   /* valores dinâmicos para o texto do markup */
   const margemNum = n(draft.marginPct);
-  const effMargin = Math.min(Math.max(margemNum, 0), 99.9);
+  const effMargin = Math.min(Math.max(margemNum, 0), MARGIN_MAX);
   const fator = 100 / (100 - effMargin);
   const margemTxt = margemNum.toLocaleString("pt-BR", { maximumFractionDigits: 2 });
   const fatorTxt = fator.toLocaleString("pt-BR", { maximumFractionDigits: 3 });
@@ -992,7 +989,7 @@ function Parametros({ par, save, costPerMinute, onDirty }) {
           {(n(draft.marginPct) >= 100 || n(draft.marginPct) < 0) ? (
             <div className="param-warn"><AlertTriangle size={15} /><span>A margem deve ficar entre 0% e 99,9%. Margem de 100% ou mais é impossível (o preço seria infinito).</span></div>
           ) : (
-            <div className="mini-note">Markup aplicado: <b>{(100 / (100 - Math.min(Math.max(n(draft.marginPct), 0), 99.9))).toLocaleString("pt-BR", { maximumFractionDigits: 3 })}×</b></div>
+            <div className="mini-note">Markup aplicado: <b>{(100 / (100 - Math.min(Math.max(n(draft.marginPct), 0), MARGIN_MAX))).toLocaleString("pt-BR", { maximumFractionDigits: 3 })}×</b></div>
           )}
           <div style={{ height: 12 }} />
           <Field label="Arredondar preço sugerido">
@@ -1099,7 +1096,7 @@ function Precificar({ ing, emb, par, prod, cfg, costPerMinute, saveProd, editTar
   const ingById = (id) => ing.find((x) => x.id === id);
   const embById = (id) => emb.find((x) => x.id === id);
 
-  const calc = computeProduct(p, { ing, emb, par, costPerMinute });
+  const calc = computeProduct(p, { ingredients: ing, packaging: emb, params: par, cpm: costPerMinute });
   const {
     ingredientsCost, packPerUnit, yld, laborFixed, totalRecipe, costPerUnit,
     suggestedRecipe, suggestedUnit, sale, realMargin, profit,
@@ -1383,7 +1380,7 @@ function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, g
   };
 
   const rows = prod
-    .map((p) => ({ p, calc: computeProduct(p, { ing, emb, par, costPerMinute }) }))
+    .map((p) => ({ p, calc: computeProduct(p, { ingredients: ing, packaging: emb, params: par, cpm: costPerMinute }) }))
     .filter(({ p }) => (p.name || "").toLowerCase().includes(q.trim().toLowerCase()))
     .filter(({ p }) =>
       filter === "todos" ? true : filter === "ativos" ? isActive(p) : !isActive(p)
@@ -1504,7 +1501,7 @@ function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, g
       {fichaFor && (
         <FichaTecnica
           name={fichaFor.name || "Produto sem nome"}
-          calc={computeProduct(fichaFor, { ing, emb, par, costPerMinute })}
+          calc={computeProduct(fichaFor, { ingredients: ing, packaging: emb, params: par, cpm: costPerMinute })}
           cfg={cfg}
           onClose={() => setFichaFor(null)}
           onPrint={() => window.print()}
@@ -1513,7 +1510,7 @@ function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, g
 
       {showLista && (
         <ListaPrecos
-          products={prod.filter(isActive).map((p) => ({ p, calc: computeProduct(p, { ing, emb, par, costPerMinute }) }))}
+          products={prod.filter(isActive).map((p) => ({ p, calc: computeProduct(p, { ingredients: ing, packaging: emb, params: par, cpm: costPerMinute }) }))}
           cfg={cfg}
           onClose={() => setShowLista(false)}
           onPrint={() => window.print()}
@@ -1995,6 +1992,47 @@ function Style() {
 }
 .app *{box-sizing:border-box;}
 .loading{padding:80px 24px;text-align:center;color:var(--ink2);font-family:'Fraunces',serif;font-size:20px;}
+
+/* SPLASH / AUTENTICAÇÃO */
+@keyframes authPulse{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+@keyframes authRise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+
+.splash{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+  background:radial-gradient(900px 420px at 50% -8%, #fff6ea, transparent), linear-gradient(160deg,var(--bg2),var(--bg));
+  color:var(--ink2);text-align:center;padding:24px;}
+.splash-mark{width:66px;height:66px;border-radius:19px;display:grid;place-items:center;color:#fff;
+  background:linear-gradient(145deg,var(--accent),var(--accent2));box-shadow:0 14px 30px -12px var(--accent2);
+  animation:authPulse 2.4s ease-in-out infinite;}
+.splash p{font-size:15px;max-width:300px;margin:0;}
+
+.auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+  background:radial-gradient(1000px 460px at 50% -10%, #fff6ea, transparent), linear-gradient(160deg,var(--bg2),var(--bg));}
+.auth-card{position:relative;overflow:hidden;width:100%;max-width:400px;background:var(--card);
+  border:1px solid var(--line);border-radius:24px;padding:38px 34px 30px;text-align:center;
+  box-shadow:0 1px 2px rgba(58,42,32,.05),0 26px 60px -28px rgba(58,42,32,.42);
+  animation:authRise .45s ease both;}
+.auth-card::before{content:"";position:absolute;top:0;left:0;right:0;height:4px;
+  background:linear-gradient(90deg,var(--accent),var(--gold));}
+.auth-mark{width:62px;height:62px;border-radius:18px;display:grid;place-items:center;color:#fff;margin:6px auto 14px;
+  background:linear-gradient(145deg,var(--accent),var(--accent2));box-shadow:0 14px 30px -12px var(--accent2);}
+.auth-brand{font-size:11.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);margin-bottom:12px;}
+.auth-title{font-family:'Fraunces',serif;font-weight:600;font-size:27px;margin:0 0 6px;color:var(--ink);letter-spacing:-.01em;}
+.auth-sub{font-size:13.5px;color:var(--ink2);line-height:1.55;margin:0 auto 24px;max-width:300px;}
+.auth-field{display:block;text-align:left;margin-bottom:15px;}
+.auth-field span{display:block;font-size:12.5px;font-weight:600;color:var(--ink);margin-bottom:6px;}
+.auth-field input{width:100%;}
+.auth-error{display:flex;gap:8px;align-items:flex-start;background:#fdecea;border:1px solid #f3c4bd;color:var(--red);
+  font-size:12.5px;line-height:1.45;border-radius:11px;padding:10px 12px;margin-bottom:15px;text-align:left;}
+.auth-error svg{flex:none;margin-top:1px;}
+.auth-submit{width:100%;justify-content:center;margin-top:6px;padding:12px 16px;font-size:14.5px;}
+.auth-foot{font-size:12px;color:var(--ink2);margin:18px 0 0;line-height:1.5;}
+
+/* ÁREA DO USUÁRIO no header */
+.user-box{display:flex;align-items:center;gap:8px;}
+.user-name{font-size:13px;font-weight:600;color:var(--ink2);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.logout-btn{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;cursor:pointer;
+  border:1px solid var(--line);background:var(--card);color:var(--ink2);transition:.15s;}
+.logout-btn:hover{background:#fdecea;border-color:#f3c4bd;color:var(--red);}
 
 /* HEADER */
 .head{

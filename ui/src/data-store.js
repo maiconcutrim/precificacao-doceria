@@ -64,6 +64,9 @@ export function createApiStore({ baseUrl, getToken, onUnauthorized } = {}) {
     saveParameters:  (obj)  => req("PUT", "/parameters", obj),
     saveProducts:    (list) => req("PUT", "/products", list),
     saveConfig:      (obj)  => req("PUT", "/config", obj),
+
+    /* migração: envia o backup JSON completo; o servidor reconcilia em transação */
+    importAll:       (payload) => req("POST", "/import", payload),
   };
 }
 

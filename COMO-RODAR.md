@@ -51,8 +51,9 @@ npm -v
    O Vite mostra um endereço (ex.: `http://localhost:5173`). Abra no navegador — a
    interface completa aparece. Para parar, volte ao PowerShell e tecle `Ctrl + C`.
 
-   > Os dados que você cadastrar ficam salvos no navegador (localStorage) entre
-   > recarregamentos. A ligação com o servidor é o próximo passo da Fase 1.
+   > Na **primeira vez**, a interface mostra a tela de **primeiro acesso** para criar a
+   > conta da dona; depois, a tela de **login**. A interface conversa com o servidor
+   > (passo abaixo), então rode os dois juntos.
 
 ## Rodar e testar o servidor
 
@@ -89,8 +90,8 @@ npm -v
 
 ## Observações
 
-- **Interface ↔ servidor** ainda não estão ligados; é o próximo passo. Por ora, a
-  interface salva no navegador e o servidor é testado pelas rotas acima.
+- **Interface ↔ servidor** já estão ligados: rode `dev:server` e `dev:ui` juntos.
+  No primeiro acesso, crie a conta da dona; os dados são salvos no servidor (SQLite).
 - No `npm install`, o pacote do banco (`better-sqlite3`) baixa uma versão pronta para
   Windows **quando você usa o Node 22**. Se aparecer erro de compilação mencionando
   `prebuild-install ... No prebuilt binaries found` e `Visual Studio`/`Windows SDK`, é

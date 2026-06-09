@@ -34,7 +34,7 @@ desktop/        Empacotamento Electron (Windows) com auto-atualização. Sobe o 
 
 - [x] **Fase 0 — preparação:** `pricing-core` extraído e validado, esquema do banco (`server/schema.sql`),
       contrato da camada de dados (`ui/src/data-store.js`), e acesso a dados isolado na UI.
-- [ ] **Fase 1 — servidor:** API + SQLite + login + endpoints de dados + importação do backup JSON.
+- [x] **Fase 1 — servidor + integração:** API + SQLite + login (sessões) + endpoints de dados (validados pelo pricing-core) + importação do backup + interface ligada ao servidor com tela de login.
 - [ ] **Fase 2 — histórico de preços:** instantâneo ao salvar + tela de histórico.
 - [ ] **Fase 3 — multiusuário e offline:** papéis, cache offline, armazenamento de logos.
 

@@ -22,14 +22,13 @@ dados é trocar a implementação num único ponto.
 
 - `src/data-store.js` — implementação de **produção** (`createApiStore`), que fala
   com a API local do servidor.
-- No protótipo, `App.jsx` traz um repositório local interno (`createLocalRepo`).
-  Rodando no navegador (dev), ele persiste os dados em `localStorage`, então o que
-  você cadastrar continua lá entre recarregamentos.
+- `App.jsx` cria o repositório com `createApiStore` usando o token da sessão. Em
+  desenvolvimento (Vite em :5173) ele fala com o servidor em :4317; empacotado, usa
+  a mesma origem.
 
-## Pendências de integração (Fase 1)
+## Integração com o servidor (Fase 1 — concluída)
 
-- [ ] Importar as funções de cálculo de `@doceria/pricing-core` em vez de mantê-las
-      embutidas em `App.jsx` (mesma lógica, fonte única).
-- [ ] Trocar o repositório local pelo `createApiStore` de `data-store.js`,
-      apontando para a API do servidor.
-- [ ] Adicionar a tela de login (consumindo `/auth/login`).
+- [x] Conecta à API do servidor (`createApiStore`), com token de sessão.
+- [x] Tela de login / primeiro acesso e botão Sair no cabeçalho.
+- [x] Importação do backup via `/api/import`.
+- [x] Cálculo importado de `@doceria/pricing-core` (fonte única, igual ao servidor).
