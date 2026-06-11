@@ -67,6 +67,12 @@ export function createApiStore({ baseUrl, getToken, onUnauthorized } = {}) {
 
     /* migração: envia o backup JSON completo; o servidor reconcilia em transação */
     importAll:       (payload) => req("POST", "/import", payload),
+
+    /* gestão de usuários (somente admin) */
+    listUsers:   () => req("GET", "/users"),
+    createUser:  (u) => req("POST", "/users", u),
+    updateUser:  (id, patch) => req("PUT", `/users/${id}`, patch),
+    deleteUser:  (id) => req("DELETE", `/users/${id}`),
   };
 }
 

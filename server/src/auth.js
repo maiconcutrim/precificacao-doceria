@@ -33,6 +33,11 @@ export function normalizeUsername(u) {
   return String(u || "").trim().toLowerCase();
 }
 
+/* Papéis e permissões. */
+export const VALID_ROLES = ["view", "edit", "admin"];
+const RANK = { view: 0, edit: 1, admin: 2 };
+export const normalizeRole = (r) => (VALID_ROLES.includes(r) ? r : "view");
+
 /* Middlewares de proteção. */
 export function makeAuth(db) {
   const findSession = db.prepare(`
@@ -52,19 +57,29 @@ export function makeAuth(db) {
     next();
   }
 
-  function requireOwner(req, res, next) {
-    if (!req.user || req.user.role !== "owner")
-      return res.status(403).json({ error: "Apenas a dona pode fazer isso." });
+  // "edit" ou "admin" podem alterar dados (produtos, ingredientes, embalagens)
+  function requireEditor(req, res, next) {
+    if (!req.user || RANK[req.user.role] < RANK.edit)
+      return res.status(403).json({ error: "Você não tem permissão para alterar dados." });
     next();
   }
 
-  return { requireAuth, requireOwner };
+  // só "admin" gerencia usuários, parâmetros e configurações
+  function requireAdmin(req, res, next) {
+    if (!req.user || req.user.role !== "admin")
+      return res.status(403).json({ error: "Apenas um administrador pode fazer isso." });
+    next();
+  }
+
+  return { requireAuth, requireEditor, requireAdmin };
 }
 
 /* Rotas de autenticação e gestão de usuários. */
 export function registerAuthRoutes(app, db, auth) {
   const countUsers = db.prepare("SELECT COUNT(*) AS c FROM users");
+  const countActiveAdmins = db.prepare("SELECT COUNT(*) AS c FROM users WHERE role='admin' AND active=1");
   const findByUsername = db.prepare("SELECT * FROM users WHERE username = ?");
+  const findById = db.prepare("SELECT * FROM users WHERE id = ?");
   const insertUser = db.prepare(
     "INSERT INTO users (username, display_name, password_hash, role) VALUES (?, ?, ?, ?)"
   );
@@ -72,9 +87,17 @@ export function registerAuthRoutes(app, db, auth) {
     "INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, datetime('now', ?))"
   );
   const deleteSession = db.prepare("DELETE FROM sessions WHERE token = ?");
+  const deleteUserSessions = db.prepare("DELETE FROM sessions WHERE user_id = ?");
   const deleteExpired = db.prepare("DELETE FROM sessions WHERE expires_at <= datetime('now')");
   const touchLogin = db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?");
-  const listUsers = db.prepare("SELECT id, username, display_name, role, active FROM users ORDER BY id");
+  const listUsers = db.prepare(
+    "SELECT id, username, display_name, role, active, last_login_at FROM users ORDER BY (role='admin') DESC, display_name"
+  );
+  const setName = db.prepare("UPDATE users SET display_name=? WHERE id=?");
+  const setRole = db.prepare("UPDATE users SET role=? WHERE id=?");
+  const setActive = db.prepare("UPDATE users SET active=? WHERE id=?");
+  const setPassword = db.prepare("UPDATE users SET password_hash=? WHERE id=?");
+  const removeUser = db.prepare("DELETE FROM users WHERE id=?");
 
   const startSession = (userId) => {
     const token = newToken();
@@ -82,13 +105,10 @@ export function registerAuthRoutes(app, db, auth) {
     return token;
   };
   const publicUser = (u) => ({
-    id: u.id,
-    username: u.username,
-    displayName: u.display_name,
-    role: u.role,
+    id: u.id, username: u.username, displayName: u.display_name, role: u.role, active: !!u.active,
   });
 
-  function validateCredentials(body) {
+  function credBasics(body) {
     const username = normalizeUsername(body?.username);
     const password = String(body?.password || "");
     if (!username) return { error: "Informe um nome de usuário." };
@@ -103,18 +123,15 @@ export function registerAuthRoutes(app, db, auth) {
     res.json({ needsSetup: countUsers.get().c === 0 });
   });
 
-  // Primeiro acesso: cria a conta da DONA (somente enquanto não houver usuários).
+  // Primeiro acesso: cria a conta ADMINISTRADORA (somente enquanto não houver usuários).
   app.post("/auth/register", (req, res) => {
     if (countUsers.get().c > 0)
-      return res.status(403).json({ error: "Já existe uma conta. Peça à dona para criar seu usuário." });
-    const v = validateCredentials(req.body);
+      return res.status(403).json({ error: "Já existe uma conta. Peça a um administrador para criar seu usuário." });
+    const v = credBasics(req.body);
     if (v.error) return res.status(400).json({ error: v.error });
-    const info = insertUser.run(v.username, v.displayName, hashPassword(v.password), "owner");
+    const info = insertUser.run(v.username, v.displayName, hashPassword(v.password), "admin");
     const token = startSession(info.lastInsertRowid);
-    res.status(201).json({
-      token,
-      user: { id: info.lastInsertRowid, username: v.username, displayName: v.displayName, role: "owner" },
-    });
+    res.status(201).json({ token, user: publicUser(findById.get(info.lastInsertRowid)) });
   });
 
   // Entrar.
@@ -141,30 +158,68 @@ export function registerAuthRoutes(app, db, auth) {
     res.json({ user: req.user });
   });
 
-  // Gestão de usuários — só a dona.
-  app.get("/api/users", auth.requireAuth, auth.requireOwner, (_req, res) => {
+  /* -------------------- Gestão de usuários (somente admin) -------------------- */
+  app.get("/api/users", auth.requireAuth, auth.requireAdmin, (_req, res) => {
     res.json(
       listUsers.all().map((u) => ({
-        id: u.id,
-        username: u.username,
-        displayName: u.display_name,
-        role: u.role,
-        active: !!u.active,
+        id: u.id, username: u.username, displayName: u.display_name,
+        role: u.role, active: !!u.active, lastLoginAt: u.last_login_at,
       }))
     );
   });
 
-  app.post("/api/users", auth.requireAuth, auth.requireOwner, (req, res) => {
-    const v = validateCredentials(req.body);
+  app.post("/api/users", auth.requireAuth, auth.requireAdmin, (req, res) => {
+    const v = credBasics(req.body);
     if (v.error) return res.status(400).json({ error: v.error });
     if (findByUsername.get(v.username))
       return res.status(409).json({ error: "Já existe um usuário com esse nome." });
-    const role = req.body?.role === "owner" ? "owner" : "staff";
     try {
-      const info = insertUser.run(v.username, v.displayName, hashPassword(v.password), role);
-      res.status(201).json({ id: info.lastInsertRowid, username: v.username, displayName: v.displayName, role });
+      const info = insertUser.run(v.username, v.displayName, hashPassword(v.password), normalizeRole(req.body?.role));
+      res.status(201).json(publicUser(findById.get(info.lastInsertRowid)));
     } catch {
       res.status(409).json({ error: "Não foi possível criar o usuário." });
     }
+  });
+
+  app.put("/api/users/:id", auth.requireAuth, auth.requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    const u = findById.get(id);
+    if (!u) return res.status(404).json({ error: "Usuário não encontrado." });
+    const body = req.body || {};
+
+    const newRole = body.role !== undefined ? normalizeRole(body.role) : u.role;
+    const newActive = body.active !== undefined ? (body.active ? 1 : 0) : u.active;
+
+    // invariante: sempre deve restar ao menos um administrador ativo
+    const lastActiveAdmin = u.role === "admin" && u.active === 1 && countActiveAdmins.get().c <= 1;
+    if (lastActiveAdmin && (newRole !== "admin" || newActive === 0))
+      return res.status(409).json({ error: "Não é possível rebaixar ou desativar o último administrador ativo. Promova outro administrador antes." });
+    if (id === req.user.id && newActive === 0)
+      return res.status(409).json({ error: "Você não pode desativar a própria conta." });
+
+    if (body.password !== undefined && String(body.password) !== "") {
+      if (String(body.password).length < MIN_PASSWORD)
+        return res.status(400).json({ error: `A senha precisa de ao menos ${MIN_PASSWORD} caracteres.` });
+      setPassword.run(hashPassword(String(body.password)), id);
+    }
+    if (body.displayName !== undefined) setName.run(String(body.displayName).trim() || u.display_name, id);
+    if (body.role !== undefined) setRole.run(newRole, id);
+    if (body.active !== undefined) {
+      setActive.run(newActive, id);
+      if (newActive === 0) deleteUserSessions.run(id); // desativar encerra as sessões abertas
+    }
+    res.json(publicUser(findById.get(id)));
+  });
+
+  app.delete("/api/users/:id", auth.requireAuth, auth.requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    const u = findById.get(id);
+    if (!u) return res.status(404).json({ error: "Usuário não encontrado." });
+    if (id === req.user.id)
+      return res.status(409).json({ error: "Você não pode excluir a própria conta." });
+    if (u.role === "admin" && u.active === 1 && countActiveAdmins.get().c <= 1)
+      return res.status(409).json({ error: "Não é possível excluir o último administrador ativo." });
+    removeUser.run(id); // as sessões do usuário caem por CASCADE
+    res.status(204).end();
   });
 }

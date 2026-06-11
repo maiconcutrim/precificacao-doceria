@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT
 );
-INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
+INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '2');
 
 -- Identidade do negócio (linha única)
 CREATE TABLE IF NOT EXISTS business (
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS users (
   username      TEXT    NOT NULL UNIQUE,
   display_name  TEXT    NOT NULL DEFAULT '',
   password_hash TEXT    NOT NULL,
-  role          TEXT    NOT NULL DEFAULT 'staff' CHECK (role IN ('owner','staff')),
+  role          TEXT    NOT NULL DEFAULT 'view' CHECK (role IN ('view','edit','admin')),
   active        INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
   created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
   last_login_at TEXT

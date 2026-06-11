@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useContext, createContext } from "react";
+import React, { useState, useEffect, useRef, useMemo, useContext, createContext } from "react";
 import {
   Calculator, Package, Carrot, SlidersHorizontal, Plus, Trash2,
   Save, FolderOpen, ChefHat, TrendingUp, Tag, Percent, Clock,
@@ -247,39 +247,51 @@ function AuthScreen({ mode, onSubmit, error, busy }) {
 
   return (
     <>
-      <div className="auth-wrap">
-        <div className="auth-card">
-          <div className="auth-mark"><ChefHat size={28} /></div>
-          <div className="auth-brand">Ateliê de Preços</div>
-          <h1 className="auth-title">{isSetup ? "Bem-vinda!" : "Entrar"}</h1>
-          <p className="auth-sub">
-            {isSetup
-              ? "Crie a conta da dona para começar a usar o sistema nesta máquina."
-              : "Acesse com seu usuário e senha."}
-          </p>
+      <div className="auth-page">
+        <div className="auth-shell">
+          <aside className="auth-aside">
+            <div className="auth-aside-top">
+              <div className="auth-aside-mark"><ChefHat size={28} /></div>
+              <span className="auth-aside-eyebrow">Precificação para confeitarias</span>
+            </div>
+            <div className="auth-aside-bottom">
+              <div className="auth-aside-brand">Ateliê de Preços</div>
+              <p className="auth-aside-tag">Calcule o preço dos seus doces com confiança — do custo ao preço certo.</p>
+            </div>
+          </aside>
 
-          {isSetup && (
+          <div className="auth-form">
+            <span className="auth-eyebrow">{isSetup ? "Primeiro acesso" : "Bem-vinda de volta"}</span>
+            <h1 className="auth-title">{isSetup ? "Crie sua conta" : "Entrar"}</h1>
+            <p className="auth-sub">
+              {isSetup
+                ? "Esta é a conta da dona do negócio. Os dados ficam guardados só nesta máquina."
+                : "Acesse com seu usuário e senha."}
+            </p>
+
+            {isSetup && (
+              <label className="auth-field">
+                <span>Seu nome</span>
+                <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} onKeyDown={onKey} placeholder="Ex.: Leandra" />
+              </label>
+            )}
             <label className="auth-field">
-              <span>Seu nome</span>
-              <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} onKeyDown={onKey} placeholder="Ex.: Leandra" />
+              <span>Usuário</span>
+              <input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={onKey} placeholder="Ex.: leandra" autoCapitalize="none" />
             </label>
-          )}
-          <label className="auth-field">
-            <span>Usuário</span>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={onKey} placeholder="Ex.: leandra" autoCapitalize="none" />
-          </label>
-          <label className="auth-field">
-            <span>Senha</span>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={onKey} placeholder={isSetup ? "Mínimo de 6 caracteres" : "Sua senha"} />
-          </label>
+            <label className="auth-field">
+              <span>Senha</span>
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={onKey} placeholder={isSetup ? "Mínimo de 6 caracteres" : "Sua senha"} />
+            </label>
 
-          {error && <div className="auth-error"><AlertTriangle size={15} /><span>{error}</span></div>}
+            {error && <div className="auth-error"><AlertTriangle size={15} /><span>{error}</span></div>}
 
-          <button className="btn primary auth-submit" onClick={submit} disabled={busy}>
-            {busy ? "Aguarde…" : isSetup ? "Criar conta e entrar" : "Entrar"}
-          </button>
+            <button className="btn primary auth-submit" onClick={submit} disabled={busy}>
+              {busy ? "Aguarde…" : isSetup ? "Criar conta e entrar" : "Entrar"}
+            </button>
 
-          {isSetup && <p className="auth-foot">Sua conta e seus dados ficam guardados só nesta máquina.</p>}
+            {isSetup && <p className="auth-foot">Você poderá cadastrar suas funcionárias depois, em Configurações.</p>}
+          </div>
         </div>
       </div>
       <Style />
@@ -303,6 +315,16 @@ function App({ token, user, onLogout, onUnauthorized }) {
   const [unsaved, setUnsaved] = useState(false);   // rascunho pendente em Parâmetros/Configurações
   const [pendingView, setPendingView] = useState(null);
 
+  /* permissões por papel */
+  const role = user?.role || "view";
+  const canEdit = role === "edit" || role === "admin";
+  const isAdmin = role === "admin";
+  const allowedViews = isAdmin
+    ? ["inicio", "precificar", "produtos", "ingredientes", "embalagens", "parametros", "config"]
+    : canEdit
+    ? ["inicio", "precificar", "produtos", "ingredientes", "embalagens"]
+    : ["inicio", "produtos"]; // Visualizar: painel inicial + lista de produtos (só leitura)
+
   const repo = useMemo(
     () => createApiStore({ baseUrl: API_BASE, getToken: () => token, onUnauthorized }),
     [token, onUnauthorized]
@@ -317,6 +339,7 @@ function App({ token, user, onLogout, onUnauthorized }) {
   /* navegação protegida: se houver alterações não salvas, pede confirmação */
   const requestView = (target) => {
     if (target === view) return;
+    if (!allowedViews.includes(target)) return;   // bloqueio por permissão
     if (unsaved) { setPendingView(target); return; }
     setView(target);
   };
@@ -362,7 +385,7 @@ function App({ token, user, onLogout, onUnauthorized }) {
 
   const loadSeed = () => { saveIng(SEED.ing); saveEmb(SEED.emb); };
 
-  const goToEdit = (product) => { setEditTarget(product); setView("precificar"); };
+  const goToEdit = (product) => { if (!canEdit) return; setEditTarget(product); setView("precificar"); };
 
   /* uso de ingredientes/embalagens nos produtos (aviso ao remover) */
   const ingredientUsage = (id) => prod.filter((p) => (p.items || []).some((it) => it.ingredientId === id)).length;
@@ -419,16 +442,16 @@ function App({ token, user, onLogout, onUnauthorized }) {
   return (
     <ToastContext.Provider value={notify}>
     <Shell>
-      <Header view={view} setView={requestView} cfg={cfg} user={user} onLogout={onLogout} />
+      <Header view={view} setView={requestView} cfg={cfg} user={user} onLogout={onLogout} allowed={allowedViews} />
       <main className="content">
         {view === "inicio" && (
           <Inicio
             ing={ing} emb={emb} par={par} prod={prod} cfg={cfg}
-            costPerMinute={costPerMinute}
+            costPerMinute={costPerMinute} canEdit={canEdit}
             goTo={requestView} onEditProduct={goToEdit}
           />
         )}
-        {view === "precificar" && (
+        {view === "precificar" && canEdit && (
           <Precificar
             ing={ing} emb={emb} par={par} prod={prod} cfg={cfg}
             costPerMinute={costPerMinute} saveProd={saveProd}
@@ -440,11 +463,11 @@ function App({ token, user, onLogout, onUnauthorized }) {
         {view === "produtos" && (
           <Produtos
             prod={prod} ing={ing} emb={emb} par={par} cfg={cfg}
-            costPerMinute={costPerMinute} saveProd={saveProd}
-            onEdit={goToEdit} goPrecificar={() => { setEditTarget(null); setView("precificar"); }}
+            costPerMinute={costPerMinute} saveProd={saveProd} canEdit={canEdit}
+            onEdit={goToEdit} goPrecificar={() => { if (!canEdit) return; setEditTarget(null); setView("precificar"); }}
           />
         )}
-        {view === "ingredientes" && (
+        {view === "ingredientes" && canEdit && (
           <Cadastro
             title="Ingredientes" icon={<Carrot size={20} />}
             data={ing} save={saveIng}
@@ -456,7 +479,7 @@ function App({ token, user, onLogout, onUnauthorized }) {
             onDirty={setUnsaved}
           />
         )}
-        {view === "embalagens" && (
+        {view === "embalagens" && canEdit && (
           <Cadastro
             title="Embalagens" icon={<Package size={20} />}
             data={emb} save={saveEmb}
@@ -468,12 +491,13 @@ function App({ token, user, onLogout, onUnauthorized }) {
             onDirty={setUnsaved}
           />
         )}
-        {view === "parametros" && (
+        {view === "parametros" && isAdmin && (
           <Parametros par={par} save={savePar} costPerMinute={costPerMinute} onDirty={setUnsaved} />
         )}
-        {view === "config" && (
+        {view === "config" && isAdmin && (
           <Configuracoes cfg={cfg} save={saveCfg} onExport={exportData} onImport={importData}
-            counts={{ ing: ing.length, emb: emb.length, prod: prod.length }} onDirty={setUnsaved} />
+            counts={{ ing: ing.length, emb: emb.length, prod: prod.length }} onDirty={setUnsaved}
+            repo={repo} currentUser={user} />
         )}
       </main>
       <ToastViewport toasts={toasts} />
@@ -503,8 +527,8 @@ function Shell({ children }) {
   return <div className="app">{children}</div>;
 }
 
-function Header({ view, setView, cfg, user, onLogout }) {
-  const tabs = [
+function Header({ view, setView, cfg, user, onLogout, allowed }) {
+  const allTabs = [
     { id: "inicio", label: "Início", icon: <Home size={17} /> },
     { id: "precificar", label: "Precificar", icon: <Calculator size={17} /> },
     { id: "produtos", label: "Produtos", icon: <FolderOpen size={17} /> },
@@ -513,7 +537,24 @@ function Header({ view, setView, cfg, user, onLogout }) {
     { id: "parametros", label: "Parâmetros", icon: <SlidersHorizontal size={17} /> },
     { id: "config", label: "Configurações", icon: <Settings size={17} /> },
   ];
+  const tabs = allowed ? allTabs.filter((t) => allowed.includes(t.id)) : allTabs;
   const hasBrand = cfg && (cfg.bizName || cfg.logo);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDoc = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setMenuOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [menuOpen]);
+  const roleLabel = user ? (({ admin: "Administrador", edit: "Editor", view: "Visualização" })[user.role] || "") : "";
+  const initials = (() => {
+    const base = (user?.displayName || user?.username || "?").trim();
+    const parts = base.split(/\s+/).filter(Boolean);
+    return (parts.length >= 2 ? parts[0][0] + parts[1][0] : base.slice(0, 2)).toUpperCase();
+  })();
   return (
     <header className="head">
       <div className="brand">
@@ -537,9 +578,29 @@ function Header({ view, setView, cfg, user, onLogout }) {
         ))}
       </nav>
       {user && (
-        <div className="user-box">
-          <span className="user-name" title={user.role === "owner" ? "Dona" : "Funcionária"}>{user.displayName || user.username}</span>
-          <button className="logout-btn" onClick={onLogout} title="Sair"><LogOut size={16} /></button>
+        <div className="user-menu-wrap" ref={menuRef}>
+          <button
+            className={"avatar" + (menuOpen ? " open" : "")}
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label="Sua conta"
+            title="Sua conta"
+          >
+            {initials}
+          </button>
+          {menuOpen && (
+            <div className="user-menu" role="menu">
+              <div className="user-menu-head">
+                <span className="user-menu-name">{user.displayName || user.username}</span>
+                <span className="user-menu-user">@{user.username}</span>
+                {roleLabel && <span className="user-menu-role">{roleLabel}</span>}
+              </div>
+              <button className="user-menu-item" role="menuitem" onClick={() => { setMenuOpen(false); onLogout(); }}>
+                <LogOut size={15} /> Sair
+              </button>
+            </div>
+          )}
         </div>
       )}
     </header>
@@ -549,7 +610,7 @@ function Header({ view, setView, cfg, user, onLogout }) {
 /* ------------------------------------------------------------------ */
 /*  INÍCIO / RESUMO (dashboard)                                        */
 /* ------------------------------------------------------------------ */
-function Inicio({ ing, emb, par, prod, cfg, costPerMinute, goTo, onEditProduct }) {
+function Inicio({ ing, emb, par, prod, cfg, costPerMinute, goTo, onEditProduct, canEdit }) {
   const monthlyH = n(par.hoursPerDay) * n(par.daysPerWeek) * WEEKS_PER_MONTH;
   const paramsOk = monthlyH > 0 && n(par.desiredEarnings) > 0;
 
@@ -588,11 +649,11 @@ function Inicio({ ing, emb, par, prod, cfg, costPerMinute, goTo, onEditProduct }
             <p className="dash-sub">Um panorama rápido da sua precificação.</p>
           </div>
         </div>
-        <button className="btn primary" onClick={() => goTo("precificar")}><Plus size={16} /> Novo produto</button>
+        {canEdit && <button className="btn primary" onClick={() => goTo("precificar")}><Plus size={16} /> Novo produto</button>}
       </div>
 
       {/* GUIA DE PRIMEIRO USO */}
-      {!allDone && (
+      {canEdit && !allDone && (
         <div className="card onboard">
           <h3 className="card-h"><Sparkles size={16} /> Comece por aqui ({doneCount}/{steps.length})</h3>
           <p className="onboard-intro">Para os preços saírem corretos, configure o sistema nesta ordem. Sem os parâmetros, a mão de obra e os custos fixos não entram no cálculo.</p>
@@ -1330,7 +1391,7 @@ function Precificar({ ing, emb, par, prod, cfg, costPerMinute, saveProd, editTar
 /* ------------------------------------------------------------------ */
 /*  PRODUTOS (catálogo / consulta de preços)                           */
 /* ------------------------------------------------------------------ */
-function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, goPrecificar }) {
+function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, goPrecificar, canEdit }) {
   const notify = useNotify();
   const [q, setQ] = useState("");
   const [fichaFor, setFichaFor] = useState(null);
@@ -1405,7 +1466,7 @@ function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, g
           sub={`${prod.length} ${prod.length === 1 ? "produto cadastrado" : "produtos cadastrados"} · clique para editar a precificação`} />
         <div className="result-actions">
           <button className="btn ghost" onClick={() => setShowLista(true)}><Receipt size={16} /> Lista de preços</button>
-          <button className="btn primary" onClick={goPrecificar}><Plus size={16} /> Novo produto</button>
+          {canEdit && <button className="btn primary" onClick={goPrecificar}><Plus size={16} /> Novo produto</button>}
         </div>
       </div>
 
@@ -1457,14 +1518,20 @@ function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, g
                 <tr key={p.id} className={active ? "" : "row-off"}>
                   <td>
                     <div className="cat-name-row">
-                      <button className="cat-name" onClick={() => onEdit(p)}>{p.name || "(sem nome)"}</button>
-                      <button
-                        className={"status-pill " + (active ? "on" : "off")}
-                        onClick={() => toggleStatus(p.id)}
-                        title={active ? "Clique para inativar" : "Clique para reativar"}
-                      >
-                        {active ? "Ativo" : "Inativo"}
-                      </button>
+                      {canEdit
+                        ? <button className="cat-name" onClick={() => onEdit(p)}>{p.name || "(sem nome)"}</button>
+                        : <span className="cat-name cat-name-static">{p.name || "(sem nome)"}</span>}
+                      {canEdit ? (
+                        <button
+                          className={"status-pill " + (active ? "on" : "off")}
+                          onClick={() => toggleStatus(p.id)}
+                          title={active ? "Clique para inativar" : "Clique para reativar"}
+                        >
+                          {active ? "Ativo" : "Inativo"}
+                        </button>
+                      ) : (
+                        <span className={"status-pill static " + (active ? "on" : "off")}>{active ? "Ativo" : "Inativo"}</span>
+                      )}
                     </div>
                     <span className="cat-meta">{calc.yld ? `rende ${calc.yld.toLocaleString("pt-BR")} un.` : "rendimento não definido"}</span>
                   </td>
@@ -1478,17 +1545,17 @@ function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, g
                   </td>
                   <td>
                     <div className="cat-actions">
-                      <button className="icon-btn" title="Editar precificação" onClick={() => onEdit(p)}><Pencil size={15} /></button>
-                      <button className="icon-btn" title="Duplicar produto" onClick={() => duplicate(p)}><Copy size={15} /></button>
+                      {canEdit && <button className="icon-btn" title="Editar precificação" onClick={() => onEdit(p)}><Pencil size={15} /></button>}
+                      {canEdit && <button className="icon-btn" title="Duplicar produto" onClick={() => duplicate(p)}><Copy size={15} /></button>}
                       <button className="icon-btn" title="Ficha técnica" onClick={() => setFichaFor(p)}><FileText size={15} /></button>
-                      {confirmId === p.id ? (
+                      {canEdit && (confirmId === p.id ? (
                         <>
                           <button className="icon-btn confirm-del" title="Confirmar exclusão" onClick={() => del(p.id)}><Check size={15} /></button>
                           <button className="icon-btn" title="Cancelar" onClick={() => setConfirmId(null)}><X size={15} /></button>
                         </>
                       ) : (
                         <button className="icon-btn del-btn" title="Excluir" onClick={() => setConfirmId(p.id)}><Trash2 size={15} /></button>
-                      )}
+                      ))}
                     </div>
                   </td>
                 </tr>
@@ -1523,7 +1590,7 @@ function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, g
 /* ------------------------------------------------------------------ */
 /*  CONFIGURAÇÕES (identidade da doceria)                              */
 /* ------------------------------------------------------------------ */
-function Configuracoes({ cfg, save, onExport, onImport, counts, onDirty }) {
+function Configuracoes({ cfg, save, onExport, onImport, counts, onDirty, repo, currentUser }) {
   const notify = useNotify();
   const [draft, setDraft] = useState(cfg);
   useEffect(() => { setDraft(cfg); }, [cfg]);
@@ -1657,6 +1724,140 @@ function Configuracoes({ cfg, save, onExport, onImport, counts, onDirty }) {
           </div>
         )}
       </div>
+
+      {/* GESTÃO DE USUÁRIOS (somente admin) */}
+      <UsuariosAdmin repo={repo} currentUser={currentUser} />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  GESTÃO DE USUÁRIOS (somente admin, dentro de Configurações)        */
+/* ------------------------------------------------------------------ */
+function UsuariosAdmin({ repo, currentUser }) {
+  const notify = useNotify();
+  const [users, setUsers] = useState(null);
+  const [err, setErr] = useState("");
+  const [showNew, setShowNew] = useState(false);
+  const [form, setForm] = useState({ displayName: "", username: "", password: "", role: "view" });
+  const [pwId, setPwId] = useState(null);
+  const [pwVal, setPwVal] = useState("");
+  const [delId, setDelId] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try { setUsers(await repo.listUsers()); setErr(""); }
+    catch (e) { setErr(e.message || "Não foi possível carregar os usuários."); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const run = async (fn, okMsg) => {
+    setBusy(true);
+    try { await fn(); if (okMsg) notify("ok", okMsg); await load(); }
+    catch (e) { notify("warn", e.message || "Operação não permitida."); }
+    finally { setBusy(false); }
+  };
+
+  const create = () => {
+    if (!form.username.trim() || form.password.length < 6) {
+      notify("warn", "Informe o usuário e uma senha de ao menos 6 caracteres.");
+      return;
+    }
+    run(async () => {
+      await repo.createUser(form);
+      setForm({ displayName: "", username: "", password: "", role: "view" });
+      setShowNew(false);
+    }, "Usuário criado.");
+  };
+  const changeRole = (u, role) => run(() => repo.updateUser(u.id, { role }), "Permissão atualizada.");
+  const toggleActive = (u) => run(() => repo.updateUser(u.id, { active: !u.active }), u.active ? "Usuário desativado." : "Usuário reativado.");
+  const resetPw = (u) => {
+    if (pwVal.length < 6) { notify("warn", "A nova senha precisa de ao menos 6 caracteres."); return; }
+    run(async () => { await repo.updateUser(u.id, { password: pwVal }); setPwId(null); setPwVal(""); }, "Senha alterada.");
+  };
+  const remove = (u) => run(async () => { await repo.deleteUser(u.id); setDelId(null); }, "Usuário excluído.");
+
+  return (
+    <div className="card users-card">
+      <div className="users-head">
+        <h3 className="card-h"><Building2 size={16} /> Usuários e permissões</h3>
+        {!showNew && <button className="btn primary sm" onClick={() => setShowNew(true)}><Plus size={15} /> Novo usuário</button>}
+      </div>
+      <p className="logo-hint" style={{ marginTop: 0 }}>
+        <b>Visualizar</b>: só consulta (painel inicial e lista de produtos). <b>Editar</b>: cria e altera produtos, ingredientes e embalagens. <b>Administrador</b>: acesso total, incluindo usuários, parâmetros e configurações.
+      </p>
+
+      {showNew && (
+        <div className="user-new">
+          <div className="user-new-grid">
+            <label className="auth-field"><span>Nome</span><input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} placeholder="Ex.: Ana" /></label>
+            <label className="auth-field"><span>Usuário (login)</span><input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="ex.: ana" autoCapitalize="none" /></label>
+            <label className="auth-field"><span>Senha</span><input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="mín. 6 caracteres" /></label>
+            <label className="auth-field"><span>Permissão</span>
+              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+                <option value="view">Visualizar</option>
+                <option value="edit">Editar</option>
+                <option value="admin">Administrador</option>
+              </select>
+            </label>
+          </div>
+          <div className="user-new-actions">
+            <button className="btn ghost sm" onClick={() => setShowNew(false)}>Cancelar</button>
+            <button className="btn primary sm" onClick={create} disabled={busy}><Check size={15} /> Criar usuário</button>
+          </div>
+        </div>
+      )}
+
+      {err && <div className="imp-msg err"><AlertTriangle size={15} /> {err}</div>}
+      {users === null && !err && <p className="logo-hint">Carregando usuários…</p>}
+
+      {users && (
+        <div className="users-list">
+          {users.map((u) => {
+            const isSelf = currentUser && u.id === currentUser.id;
+            return (
+              <div key={u.id} className={"user-row" + (u.active ? "" : " off")}>
+                <div className="user-info">
+                  <span className="user-row-name">{u.displayName || u.username}{isSelf && <span className="user-self"> (você)</span>}</span>
+                  <span className="user-row-sub">@{u.username}</span>
+                </div>
+                <button
+                  className={"status-pill " + (u.active ? "on" : "off") + (isSelf ? " static" : "")}
+                  disabled={busy || isSelf}
+                  title={isSelf ? "Você não pode desativar a própria conta" : u.active ? "Clique para desativar" : "Clique para reativar"}
+                  onClick={() => !isSelf && toggleActive(u)}
+                >
+                  {u.active ? "Ativo" : "Inativo"}
+                </button>
+                <select className="user-role" value={u.role} disabled={busy} onChange={(e) => changeRole(u, e.target.value)}>
+                  <option value="view">Visualizar</option>
+                  <option value="edit">Editar</option>
+                  <option value="admin">Administrador</option>
+                </select>
+                <div className="user-row-actions">
+                  {pwId === u.id ? (
+                    <span className="user-pw">
+                      <input type="password" value={pwVal} onChange={(e) => setPwVal(e.target.value)} placeholder="nova senha" />
+                      <button className="icon-btn confirm-del" title="Salvar nova senha" onClick={() => resetPw(u)}><Check size={15} /></button>
+                      <button className="icon-btn" title="Cancelar" onClick={() => { setPwId(null); setPwVal(""); }}><X size={15} /></button>
+                    </span>
+                  ) : (
+                    <button className="icon-btn" title="Alterar senha" onClick={() => { setPwId(u.id); setPwVal(""); setDelId(null); }}><Pencil size={15} /></button>
+                  )}
+                  {delId === u.id ? (
+                    <>
+                      <button className="icon-btn confirm-del" title="Confirmar exclusão" onClick={() => remove(u)}><Check size={15} /></button>
+                      <button className="icon-btn" title="Cancelar" onClick={() => setDelId(null)}><X size={15} /></button>
+                    </>
+                  ) : (
+                    <button className="icon-btn del-btn" title={isSelf ? "Você não pode excluir a própria conta" : "Excluir"} disabled={isSelf} onClick={() => { setDelId(u.id); setPwId(null); }}><Trash2 size={15} /></button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1978,11 +2179,15 @@ function Style() {
     <style>{`
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=DM+Sans:wght@400;500;600;700&display=swap');
 
-.app{
+:root{
   --bg:#F7F0E6; --bg2:#FBF6EE; --ink:#3A2A20; --ink2:#7A6557;
   --line:#E6D8C7; --card:#FFFDF9; --accent:#C0612B; --accent2:#A8431F;
   --gold:#C99A3F; --green:#5E7D52; --red:#B14A3A;
   --shadow:0 1px 2px rgba(58,42,32,.04),0 8px 24px -12px rgba(58,42,32,.18);
+}
+*{box-sizing:border-box;}
+body{margin:0;font-family:'DM Sans',sans-serif;color:var(--ink);background:var(--bg2);}
+.app{
   font-family:'DM Sans',sans-serif; color:var(--ink);
   background:
     radial-gradient(1200px 600px at 100% -10%, #F3E4CF 0%, transparent 55%),
@@ -1990,7 +2195,6 @@ function Style() {
     var(--bg);
   min-height:100vh; padding:0 0 60px;
 }
-.app *{box-sizing:border-box;}
 .loading{padding:80px 24px;text-align:center;color:var(--ink2);font-family:'Fraunces',serif;font-size:20px;}
 
 /* SPLASH / AUTENTICAÇÃO */
@@ -2005,34 +2209,76 @@ function Style() {
   animation:authPulse 2.4s ease-in-out infinite;}
 .splash p{font-size:15px;max-width:300px;margin:0;}
 
-.auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
-  background:radial-gradient(1000px 460px at 50% -10%, #fff6ea, transparent), linear-gradient(160deg,var(--bg2),var(--bg));}
-.auth-card{position:relative;overflow:hidden;width:100%;max-width:400px;background:var(--card);
-  border:1px solid var(--line);border-radius:24px;padding:38px 34px 30px;text-align:center;
-  box-shadow:0 1px 2px rgba(58,42,32,.05),0 26px 60px -28px rgba(58,42,32,.42);
-  animation:authRise .45s ease both;}
-.auth-card::before{content:"";position:absolute;top:0;left:0;right:0;height:4px;
-  background:linear-gradient(90deg,var(--accent),var(--gold));}
-.auth-mark{width:62px;height:62px;border-radius:18px;display:grid;place-items:center;color:#fff;margin:6px auto 14px;
-  background:linear-gradient(145deg,var(--accent),var(--accent2));box-shadow:0 14px 30px -12px var(--accent2);}
-.auth-brand{font-size:11.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);margin-bottom:12px;}
-.auth-title{font-family:'Fraunces',serif;font-weight:600;font-size:27px;margin:0 0 6px;color:var(--ink);letter-spacing:-.01em;}
-.auth-sub{font-size:13.5px;color:var(--ink2);line-height:1.55;margin:0 auto 24px;max-width:300px;}
-.auth-field{display:block;text-align:left;margin-bottom:15px;}
+.auth-page{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+  background:radial-gradient(1100px 500px at 50% -12%, #fff6ea, transparent), linear-gradient(160deg,var(--bg2),var(--bg));}
+.auth-shell{display:grid;grid-template-columns:1fr 1fr;width:100%;max-width:860px;background:var(--card);
+  border:1px solid var(--line);border-radius:26px;overflow:hidden;
+  box-shadow:0 1px 2px rgba(58,42,32,.05),0 30px 70px -30px rgba(58,42,32,.45);
+  animation:authRise .5s ease both;}
+
+/* painel de marca (esquerda) — gradiente quente + textura sutil de glacê */
+.auth-aside{position:relative;overflow:hidden;color:#fff;padding:42px 38px;
+  display:flex;flex-direction:column;justify-content:space-between;gap:28px;min-height:480px;
+  background:linear-gradient(155deg,var(--accent),var(--accent2));}
+.auth-aside::after{content:"";position:absolute;inset:0;opacity:.13;pointer-events:none;
+  background-image:radial-gradient(circle, #fff 1.4px, transparent 1.7px);background-size:22px 22px;}
+.auth-aside-top{position:relative;display:flex;flex-direction:column;gap:16px;align-items:flex-start;}
+.auth-aside-mark{width:60px;height:60px;border-radius:18px;display:grid;place-items:center;
+  background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.30);}
+.auth-aside-eyebrow{font-size:11.5px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.85);}
+.auth-aside-bottom{position:relative;}
+.auth-aside-brand{font-family:'Fraunces',serif;font-weight:600;font-size:32px;line-height:1.08;letter-spacing:-.01em;}
+.auth-aside-tag{font-size:14px;line-height:1.6;color:rgba(255,255,255,.9);margin:12px 0 0;max-width:260px;}
+
+/* formulário (direita) */
+.auth-form{padding:46px 42px;display:flex;flex-direction:column;justify-content:center;}
+.auth-eyebrow{font-size:11.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);margin-bottom:10px;}
+.auth-title{font-family:'Fraunces',serif;font-weight:600;font-size:28px;margin:0 0 6px;color:var(--ink);letter-spacing:-.01em;}
+.auth-sub{font-size:13.5px;color:var(--ink2);line-height:1.55;margin:0 0 22px;max-width:340px;}
+.auth-field{display:block;margin-bottom:15px;}
 .auth-field span{display:block;font-size:12.5px;font-weight:600;color:var(--ink);margin-bottom:6px;}
 .auth-field input{width:100%;}
 .auth-error{display:flex;gap:8px;align-items:flex-start;background:#fdecea;border:1px solid #f3c4bd;color:var(--red);
-  font-size:12.5px;line-height:1.45;border-radius:11px;padding:10px 12px;margin-bottom:15px;text-align:left;}
+  font-size:12.5px;line-height:1.45;border-radius:11px;padding:10px 12px;margin-bottom:15px;}
 .auth-error svg{flex:none;margin-top:1px;}
 .auth-submit{width:100%;justify-content:center;margin-top:6px;padding:12px 16px;font-size:14.5px;}
-.auth-foot{font-size:12px;color:var(--ink2);margin:18px 0 0;line-height:1.5;}
+.auth-foot{font-size:12px;color:var(--ink2);margin:16px 0 0;line-height:1.5;}
 
-/* ÁREA DO USUÁRIO no header */
-.user-box{display:flex;align-items:center;gap:8px;}
-.user-name{font-size:13px;font-weight:600;color:var(--ink2);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.logout-btn{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;cursor:pointer;
-  border:1px solid var(--line);background:var(--card);color:var(--ink2);transition:.15s;}
-.logout-btn:hover{background:#fdecea;border-color:#f3c4bd;color:var(--red);}
+/* responsivo: empilha; o painel de marca vira um topo compacto */
+@media (max-width:720px){
+  .auth-shell{grid-template-columns:1fr;max-width:420px;}
+  .auth-aside{min-height:0;flex-direction:row;align-items:center;gap:14px;padding:26px 28px;}
+  .auth-aside-top{flex-direction:row;align-items:center;gap:14px;}
+  .auth-aside-mark{width:46px;height:46px;border-radius:14px;}
+  .auth-aside-eyebrow,.auth-aside-tag{display:none;}
+  .auth-aside-brand{font-size:22px;}
+  .auth-form{padding:30px 28px;}
+}
+@media (prefers-reduced-motion: reduce){
+  .auth-shell,.splash-mark{animation:none;}
+}
+
+/* ÁREA DO USUÁRIO no header — avatar + menu */
+.user-menu-wrap{position:relative;display:flex;align-items:center;flex:0 0 auto;}
+.avatar{width:40px;height:40px;border-radius:50%;border:none;cursor:pointer;
+  display:grid;place-items:center;font-family:inherit;font-weight:700;font-size:14px;letter-spacing:.02em;
+  color:#fff;background:linear-gradient(145deg,var(--accent),var(--accent2));
+  box-shadow:0 6px 16px -7px var(--accent2);transition:.15s;}
+.avatar:hover{transform:translateY(-1px);box-shadow:0 9px 20px -8px var(--accent2);}
+.avatar.open{box-shadow:0 0 0 3px rgba(192,97,43,.22);}
+.user-menu{position:absolute;top:calc(100% + 10px);right:0;z-index:30;min-width:228px;
+  background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;
+  box-shadow:0 18px 42px -14px rgba(58,42,32,.34);animation:menuRise .14s ease;}
+@keyframes menuRise{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
+.user-menu-head{display:flex;flex-direction:column;gap:2px;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--bg2);}
+.user-menu-name{font-weight:600;color:var(--ink);font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.user-menu-user{font-size:12px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.user-menu-role{margin-top:6px;align-self:flex-start;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--accent2);background:#f6e6d6;border-radius:20px;padding:2px 9px;}
+.user-menu-item{display:flex;align-items:center;gap:9px;width:100%;border:none;background:transparent;cursor:pointer;
+  font-family:inherit;font-size:13.5px;font-weight:600;color:var(--ink);padding:12px 16px;transition:.13s;text-align:left;}
+.user-menu-item:hover{background:#fdecea;color:var(--red);}
+.user-menu-item svg{color:inherit;flex-shrink:0;}
 
 /* HEADER */
 .head{
@@ -2058,6 +2304,12 @@ function Style() {
 }
 .tab:hover{color:var(--ink);background:#fff6ea;}
 .tab.on{background:var(--ink);color:#fbf3e7;box-shadow:var(--shadow);}
+@media (max-width:720px){
+  .head{flex-wrap:wrap;gap:12px 14px;}
+  .brand{order:1;}
+  .user-menu-wrap{order:2;margin-left:auto;}
+  .tabs{order:3;flex-basis:100%;flex-wrap:wrap;}
+}
 
 /* LAYOUT */
 .content{padding:clamp(18px,3.5vw,36px) clamp(16px,4vw,40px);max-width:1240px;margin:0 auto;}
@@ -2228,9 +2480,13 @@ td.accent,.accent{color:var(--accent2);}
 .cat-name{background:transparent;border:none;font-family:inherit;font-size:15px;font-weight:600;
   color:var(--ink);cursor:pointer;padding:0;text-align:left;transition:.14s;}
 .cat-name:hover{color:var(--accent2);}
+.cat-name-static{cursor:default;}
+.cat-name-static:hover{color:var(--ink);}
 .cat-meta{display:block;font-size:11.5px;color:var(--ink2);margin-top:2px;}
 .status-pill{font-family:inherit;font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;
   border:1px solid transparent;border-radius:20px;padding:2px 9px;cursor:pointer;transition:.14s;}
+.status-pill.static{cursor:default;}
+.status-pill:disabled{cursor:default;opacity:.85;}
 .status-pill.on{background:#e7f0e1;color:#42603a;border-color:#cfe0c4;}
 .status-pill.on:hover{background:#dbe9d2;}
 .status-pill.off{background:#efe7df;color:#9a8978;border-color:#e2d5c6;}
@@ -2384,14 +2640,37 @@ td.accent,.accent{color:var(--accent2);}
 
 /* BARRA DE SALVAMENTO (parâmetros) */
 .save-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  position:sticky;bottom:16px;z-index:15;
   background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 18px;box-shadow:var(--shadow);}
-.save-bar.on{border-color:#f0cfae;background:#fffaf3;}
+.save-bar.on{border-color:#f0cfae;background:#fffaf3;box-shadow:0 10px 28px -10px rgba(58,42,32,.28);}
 .save-state{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;color:var(--ink2);}
 .save-state svg{color:var(--green);}
 .save-bar.on .save-state{color:#7a4a25;}
 .save-bar .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px rgba(192,97,43,.16);}
 .save-bar-actions{display:flex;gap:8px;}
 .btn.primary:disabled{opacity:.45;cursor:not-allowed;transform:none;}
+
+/* GESTÃO DE USUÁRIOS */
+.users-card{margin-top:18px;}
+.users-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:2px;}
+.user-new{background:var(--bg2);border:1px solid var(--line);border-radius:13px;padding:15px 16px;margin:6px 0 16px;}
+.user-new-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
+.user-new-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}
+.users-list{display:flex;flex-direction:column;gap:8px;margin-top:6px;}
+.user-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 14px;}
+.user-row.off{background:var(--bg2);opacity:.78;}
+.user-info{flex:1 1 160px;min-width:0;display:flex;flex-direction:column;}
+.user-row-name{font-weight:600;color:var(--ink);font-size:14.5px;}
+.user-self{color:var(--ink2);font-weight:500;font-size:12.5px;}
+.user-row-sub{font-size:12px;color:var(--ink2);}
+.user-role{font-family:inherit;font-size:13px;color:var(--ink);background:var(--bg2);
+  border:1px solid var(--line);border-radius:9px;padding:6px 9px;cursor:pointer;}
+.user-role:disabled{opacity:.6;cursor:default;}
+.user-row-actions{display:flex;align-items:center;gap:2px;}
+.user-pw{display:flex;align-items:center;gap:4px;}
+.user-pw input{font-family:inherit;font-size:13px;border:1px solid var(--line);border-radius:9px;padding:6px 9px;width:130px;background:#fff;}
+@media (max-width:560px){.user-new-grid{grid-template-columns:1fr;}}
 
 /* CONTROLES EXTRA DO CATÁLOGO */
 .ctrl-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}

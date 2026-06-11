@@ -200,7 +200,7 @@ export function registerDataRoutes(app, db, auth) {
     res.json(readState());
   });
 
-  app.put("/api/ingredients", auth.requireAuth, (req, res) => {
+  app.put("/api/ingredients", auth.requireAuth, auth.requireEditor, (req, res) => {
     const list = Array.isArray(req.body) ? req.body : [];
     const bad = list.find((x) => !validateItem(x).ok);
     if (bad) return res.status(400).json({ error: "Há ingrediente com nome, valor ou quantidade inválidos." });
@@ -208,7 +208,7 @@ export function registerDataRoutes(app, db, auth) {
     catch (err) { handleWriteError(err, res); }
   });
 
-  app.put("/api/packaging", auth.requireAuth, (req, res) => {
+  app.put("/api/packaging", auth.requireAuth, auth.requireEditor, (req, res) => {
     const list = Array.isArray(req.body) ? req.body : [];
     const bad = list.find((x) => !validateItem(x).ok);
     if (bad) return res.status(400).json({ error: "Há embalagem com nome, valor ou quantidade inválidos." });
@@ -216,7 +216,7 @@ export function registerDataRoutes(app, db, auth) {
     catch (err) { handleWriteError(err, res); }
   });
 
-  app.put("/api/parameters", auth.requireAuth, (req, res) => {
+  app.put("/api/parameters", auth.requireAuth, auth.requireAdmin, (req, res) => {
     const par = req.body || {};
     const m = n(par.marginPct);
     if (m < 0 || m >= 100) return res.status(400).json({ error: "A margem deve ficar entre 0% e 99,9%." });
@@ -224,7 +224,7 @@ export function registerDataRoutes(app, db, auth) {
     catch (err) { handleWriteError(err, res); }
   });
 
-  app.put("/api/products", auth.requireAuth, (req, res) => {
+  app.put("/api/products", auth.requireAuth, auth.requireEditor, (req, res) => {
     const list = Array.isArray(req.body) ? req.body : [];
     const bad = list.find((p) => !validateProduct(p).ok);
     if (bad) return res.status(400).json({ error: "Há produto sem nome, rendimento, tempo ou ingrediente válido." });
@@ -232,7 +232,7 @@ export function registerDataRoutes(app, db, auth) {
     catch (err) { handleWriteError(err, res); }
   });
 
-  app.put("/api/config", auth.requireAuth, (req, res) => {
+  app.put("/api/config", auth.requireAuth, auth.requireAdmin, (req, res) => {
     try { writeConfig(req.body || {}); res.json(readConfig()); }
     catch (err) { handleWriteError(err, res); }
   });
@@ -246,7 +246,7 @@ export function registerDataRoutes(app, db, auth) {
     if (d.config) writeConfig(d.config);
   });
 
-  app.post("/api/import", auth.requireAuth, (req, res) => {
+  app.post("/api/import", auth.requireAuth, auth.requireAdmin, (req, res) => {
     const payload = req.body || {};
     const d = payload.data || payload;
     if (!d || typeof d !== "object") return res.status(400).json({ error: "Estrutura de backup inválida." });

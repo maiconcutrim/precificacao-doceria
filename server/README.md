@@ -23,11 +23,15 @@ Saúde: `GET http://localhost:4317/api/health`.
 ## Autenticação
 
 Login próprio, sem dependências nativas: senhas com **scrypt** (embutido no Node) e
-sessões na tabela `sessions` (token aleatório com validade de 30 dias). Ver `src/auth.js`.
+sessões na tabela `sessions` (token aleatório, validade de 30 dias). Ver `src/auth.js`.
 
-- Primeiro acesso cria a conta da **dona** (`/auth/register`, só enquanto não há usuários).
-- Demais usuários são criados pela dona em `/api/users`.
-- Toda rota de dados exige sessão válida (`Authorization: Bearer <token>`).
+Papéis: **view** (só leitura das listas), **edit** (cria/edita produtos, ingredientes,
+embalagens) e **admin** (tudo, incluindo usuários, parâmetros e configurações).
+
+- Primeiro acesso cria a conta **administradora** (`/auth/register`, só enquanto não há usuários).
+- Usuários são geridos por um admin em `/api/users` (criar, editar nome/senha/papel, ativar/desativar, excluir).
+- Sempre deve restar ao menos um administrador ativo (regra protegida no servidor).
+- Gravar produtos/ingredientes/embalagens exige papel **edit** ou **admin**; parâmetros/config/importação exigem **admin**.
 
 ## Rotas
 
