@@ -36,13 +36,19 @@ export const MARGIN_MAX = 99.9;
 
 /**
  * Converte um valor digitado (string BR) ou número em número JS.
- * "3.000,00" -> 3000 | "12,90" -> 12.9 | "3,5" -> 3.5 | "" -> 0
+ * "3.000,00" -> 3000 | "1.500" -> 1500 | "12,90" -> 12.9 | "3,5" -> 3.5 | "" -> 0
  */
 export function n(v) {
   if (typeof v === "number") return isFinite(v) ? v : 0;
   let s = String(v ?? "").trim().replace(/[^\d.,-]/g, "");
   if (!s) return 0;
-  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+  if (s.includes(",")) {
+    // tem vírgula decimal: pontos são separadores de milhar
+    s = s.replace(/\./g, "").replace(",", ".");
+  } else if (/^-?\d{1,3}(\.\d{3})+$/.test(s)) {
+    // sem vírgula, mas no padrão de milhar BR (ex.: "1.500", "1.500.000"): pontos são milhar
+    s = s.replace(/\./g, "");
+  }
   const x = parseFloat(s);
   return isNaN(x) ? 0 : x;
 }

@@ -98,7 +98,11 @@ export function registerDataRoutes(app, db, auth) {
     clearPPacks: db.prepare("DELETE FROM product_packaging WHERE product_id=?"),
     insPPack: db.prepare("INSERT INTO product_packaging (id,product_id,packaging_id,qty) VALUES (?,?,?,?)"),
     updateBusiness: db.prepare(`UPDATE business SET name=@name,owner=@owner,tagline=@tagline,phone=@phone,instagram=@instagram,logo_path=@logo,updated_at=datetime('now') WHERE id=1`),
-    lastHist: db.prepare("SELECT cost_per_unit, suggested_unit, margin_pct FROM price_history WHERE product_id=? ORDER BY id DESC LIMIT 1"),
+    lastHist: db.prepare("SELECT cost_per_unit, suggested_unit, margin_pct, sale_price FROM price_history WHERE product_id=? ORDER BY id DESC LIMIT 1"),
+    listHist: db.prepare(`SELECT h.created_at, h.cost_per_unit, h.suggested_unit, h.margin_pct, h.sale_price,
+                                 u.display_name AS author_name, u.username AS author_username
+                          FROM price_history h LEFT JOIN users u ON u.id = h.created_by
+                          WHERE h.product_id = ? ORDER BY h.id ASC`),
     insHist: db.prepare(`INSERT INTO price_history (product_id,product_name,cost_per_unit,suggested_unit,margin_pct,sale_price,inputs_json,created_by)
       VALUES (?,?,?,?,?,?,?,?)`),
   };
@@ -165,11 +169,15 @@ export function registerDataRoutes(app, db, auth) {
       // instantâneo de preço — só grava se mudou desde o último
       const calc = computeProduct(p, ctx);
       const last = stmt.lastHist.get(p.id);
+      const saleNow = numOrNull(p.salePrice);
+      const saleSame = last && ((last.sale_price == null && saleNow == null) ||
+        (last.sale_price != null && saleNow != null && Math.abs(last.sale_price - saleNow) <= 1e-6));
       const changed =
         !last ||
         Math.abs(last.cost_per_unit - calc.costPerUnit) > 1e-6 ||
         Math.abs(last.suggested_unit - calc.suggestedUnit) > 1e-6 ||
-        Math.abs(last.margin_pct - calc.marginPct) > 1e-6;
+        Math.abs(last.margin_pct - calc.marginPct) > 1e-6 ||
+        !saleSame;
       if (changed) {
         const snapshot = {
           yield: n(p.yield), minutes: n(p.minutes),
@@ -193,11 +201,27 @@ export function registerDataRoutes(app, db, auth) {
     return res.status(500).json({ error: "Erro ao gravar os dados." });
   }
 
+  /* histórico de preço de um produto (cronológico, com autor) */
+  function readProductHistory(productId) {
+    return stmt.listHist.all(productId).map((r) => ({
+      createdAt: r.created_at,
+      costPerUnit: r.cost_per_unit,
+      suggestedUnit: r.suggested_unit,
+      marginPct: r.margin_pct,
+      salePrice: r.sale_price == null ? "" : r.sale_price,
+      author: (r.author_name && r.author_name.trim()) || r.author_username || "—",
+    }));
+  }
+
   /* ---------------------------------------------------------------- */
   /*  Rotas                                                           */
   /* ---------------------------------------------------------------- */
   app.get("/api/state", auth.requireAuth, (_req, res) => {
     res.json(readState());
+  });
+
+  app.get("/api/products/:id/history", auth.requireAuth, auth.requireEditor, (req, res) => {
+    res.json(readProductHistory(req.params.id));
   });
 
   app.put("/api/ingredients", auth.requireAuth, auth.requireEditor, (req, res) => {

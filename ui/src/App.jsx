@@ -463,7 +463,7 @@ function App({ token, user, onLogout, onUnauthorized }) {
         {view === "produtos" && (
           <Produtos
             prod={prod} ing={ing} emb={emb} par={par} cfg={cfg}
-            costPerMinute={costPerMinute} saveProd={saveProd} canEdit={canEdit}
+            costPerMinute={costPerMinute} saveProd={saveProd} canEdit={canEdit} repo={repo}
             onEdit={goToEdit} goPrecificar={() => { if (!canEdit) return; setEditTarget(null); setView("precificar"); }}
           />
         )}
@@ -572,8 +572,9 @@ function Header({ view, setView, cfg, user, onLogout, allowed }) {
             key={t.id}
             className={"tab" + (view === t.id ? " on" : "")}
             onClick={() => setView(t.id)}
+            title={t.label}
           >
-            {t.icon}<span>{t.label}</span>
+            {t.icon}<span className="tab-label">{t.label}</span>
           </button>
         ))}
       </nav>
@@ -898,12 +899,19 @@ function Cadastro({ title, icon, data, save, unitOptions, qtyLabel, nameLabel, s
 /* ------------------------------------------------------------------ */
 function Parametros({ par, save, costPerMinute, onDirty }) {
   const notify = useNotify();
-  const [draft, setDraft] = useState(par);
+  /* exibe os valores em R$ já formatados (ex.: 3.000,00) ao carregar/salvar */
+  const fmtPar = (pr) => ({
+    ...pr,
+    desiredEarnings: money2(pr.desiredEarnings),
+    fixedCosts: (pr.fixedCosts || []).map((f) => ({ ...f, value: money2(f.value) })),
+    employees: (pr.employees || []).map((e) => ({ ...e, salary: money2(e.salary) })),
+  });
+  const [draft, setDraft] = useState(() => fmtPar(par));
   const [showCalc, setShowCalc] = useState(false);
-  useEffect(() => { setDraft(par); }, [par]);
+  useEffect(() => { setDraft(fmtPar(par)); }, [par]);
 
   const up = (patch) => setDraft((d) => ({ ...d, ...patch }));
-  const dirty = JSON.stringify(draft) !== JSON.stringify(par);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(fmtPar(par));
   useEffect(() => { onDirty && onDirty(dirty); return () => onDirty && onDirty(false); }, [dirty]);
   const monthlyH = n(draft.hoursPerDay) * n(draft.daysPerWeek) * WEEKS_PER_MONTH;
 
@@ -919,7 +927,7 @@ function Parametros({ par, save, costPerMinute, onDirty }) {
   const removeFee = (id) => { up({ fees: draft.fees.filter((x) => x.id !== id) }); notify("ok", "Taxa removida."); };
 
   const onSave = () => { save(draft); notify("ok", "Parâmetros salvos com sucesso."); };
-  const onDiscard = () => { setDraft(par); notify("warn", "Alterações descartadas."); };
+  const onDiscard = () => { setDraft(fmtPar(par)); notify("warn", "Alterações descartadas."); };
 
   /* valores dinâmicos para o texto do markup */
   const margemNum = n(draft.marginPct);
@@ -1107,25 +1115,6 @@ function Precificar({ ing, emb, par, prod, cfg, costPerMinute, saveProd, editTar
     salePrice: "",
     discountPct: "",
   });
-  const [p, setP] = useState(newProduct());
-  const [showFicha, setShowFicha] = useState(false);
-  const [confirmNew, setConfirmNew] = useState(false);
-  const [perr, setPerr] = useState({});
-  const notify = useNotify();
-
-  /* recebe um produto vindo do catálogo para edição */
-  useEffect(() => {
-    if (editTarget) {
-      setP({ ...newProduct(), ...editTarget });
-      clearEditTarget && clearEditTarget();
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
-  }, [editTarget]);
-
-  const up = (patch) => { setP({ ...p, ...patch }); if (Object.keys(perr).length) setPerr({}); };
-  const novo = () => { setP(newProduct()); notify("ok", "Novo produto iniciado."); };
-
-  /* detecção de alterações não salvas (produto em edição) */
   const sig = (x) => JSON.stringify({
     name: (x.name || "").trim(),
     items: (x.items || []).filter((it) => it.ingredientId).map((it) => [it.ingredientId, String(it.qty ?? "").trim()]),
@@ -1136,8 +1125,28 @@ function Precificar({ ing, emb, par, prod, cfg, costPerMinute, saveProd, editTar
     discountPct: String(x.discountPct ?? "").trim(),
     status: x.status || "ativo",
   });
-  const savedVersion = prod.find((x) => x.id === p.id);
-  const dirty = savedVersion ? sig(p) !== sig(savedVersion) : sig(p) !== sig({});
+  const [p, setP] = useState(newProduct());
+  const [savedSig, setSavedSig] = useState(() => sig(newProduct()));
+  const [showFicha, setShowFicha] = useState(false);
+  const [confirmNew, setConfirmNew] = useState(false);
+  const [perr, setPerr] = useState({});
+  const notify = useNotify();
+
+  /* recebe um produto vindo do catálogo para edição */
+  useEffect(() => {
+    if (editTarget) {
+      const loaded = { ...newProduct(), ...editTarget };
+      setP(loaded);
+      setSavedSig(sig(loaded));
+      clearEditTarget && clearEditTarget();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [editTarget]);
+
+  const up = (patch) => { setP({ ...p, ...patch }); if (Object.keys(perr).length) setPerr({}); };
+  const novo = () => { const np = newProduct(); setP(np); setSavedSig(sig(np)); notify("ok", "Novo produto iniciado."); };
+
+  const dirty = sig(p) !== savedSig;
   useEffect(() => { onDirty && onDirty(dirty); return () => onDirty && onDirty(false); }, [dirty]);
   const askNovo = () => { if (dirty) setConfirmNew(true); else novo(); };
   const confirmNovo = () => { setConfirmNew(false); novo(); };
@@ -1174,32 +1183,31 @@ function Precificar({ ing, emb, par, prod, cfg, costPerMinute, saveProd, editTar
   if (calc.marginInvalid) warnings.push("A margem definida em Parâmetros é inválida (deve ser entre 0% e 99,9%); o cálculo usou o limite seguro mais próximo.");
   if (sale > 0 && sale < costPerUnit) warnings.push("O preço de venda informado está abaixo do custo por unidade — você teria prejuízo nessa venda.");
 
-  const printFicha = () => {
-    setShowFicha(true);
-    setTimeout(() => window.print(), 120);
-  };
-
   const save = () => {
     const hasIngredient = (p.items || []).some((it) => it.ingredientId && n(it.qty) > 0);
+    const packMissingQty = (p.packs || []).some((pk) => pk.packagingId && n(pk.qty) <= 0);
     const errs = {
       name: !p.name.trim(),
       items: !hasIngredient,
       yield: n(p.yield) <= 0,
       minutes: n(p.minutes) <= 0,
+      packs: packMissingQty,
     };
-    if (errs.name || errs.items || errs.yield || errs.minutes) {
+    if (errs.name || errs.items || errs.yield || errs.minutes || errs.packs) {
       setPerr(errs);
       const missing = [];
       if (errs.name) missing.push("nome");
       if (errs.items) missing.push("ao menos um ingrediente com quantidade");
       if (errs.yield) missing.push("rendimento");
       if (errs.minutes) missing.push("tempo de produção");
+      if (errs.packs) missing.push("a quantidade das embalagens adicionadas");
       notify("warn", "Para salvar, preencha: " + missing.join(", ") + ".");
       return;
     }
     setPerr({});
     const exists = prod.some((x) => x.id === p.id);
     saveProd(exists ? prod.map((x) => (x.id === p.id ? p : x)) : [...prod, p]);
+    setSavedSig(sig(p));
     notify("ok", exists ? "Alterações salvas com sucesso." : "Produto salvo com sucesso.");
   };
 
@@ -1260,7 +1268,7 @@ function Precificar({ ing, emb, par, prod, cfg, costPerMinute, saveProd, editTar
                   {emb.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
                 </select>
                 <div className="qtybox">
-                  <NumInput className="num" value={pk.qty} onChange={(v) => up({ packs: p.packs.map((x) => x.id === pk.id ? { ...x, qty: v } : x) })} placeholder={embById(pk.packagingId)?.unit ? "" : "Qtd"} />
+                  <NumInput className={"num" + (perr.packs && pk.packagingId && n(pk.qty) <= 0 ? " input-error" : "")} value={pk.qty} onChange={(v) => up({ packs: p.packs.map((x) => x.id === pk.id ? { ...x, qty: v } : x) })} placeholder={embById(pk.packagingId)?.unit ? "" : "Qtd"} />
                   <span className="unit-tag">{embById(pk.packagingId)?.unit || ""}</span>
                 </div>
                 <span className="line-cost">{brl(pc)}</span>
@@ -1268,6 +1276,7 @@ function Precificar({ ing, emb, par, prod, cfg, costPerMinute, saveProd, editTar
               </div>
             );
           })}
+          {perr.packs && <div className="field-error">Informe a quantidade das embalagens adicionadas (ou remova a embalagem).</div>}
           <button className="btn ghost sm" onClick={() => up({ packs: [...p.packs, { id: uid(), packagingId: "", qty: "" }] })}><Plus size={14} /> Embalagem</button>
           <div className="sub-total">Embalagem por unidade: <b>{brl(packPerUnit)}</b></div>
         </div>
@@ -1288,7 +1297,7 @@ function Precificar({ ing, emb, par, prod, cfg, costPerMinute, saveProd, editTar
             <span className="result-title">{p.name || "Seu produto"}</span>
             <div className="result-actions">
               <button className="btn ghost sm" onClick={askNovo} title="Começar um novo produto"><Plus size={15} /> Novo</button>
-              <button className="btn ghost sm" onClick={printFicha} title="Gerar ficha técnica"><FileText size={15} /> Ficha</button>
+              <button className="btn ghost sm" onClick={() => setShowFicha(true)} title="Ver ficha técnica"><FileText size={15} /> Ficha</button>
               <button className="btn primary sm" onClick={save}><Save size={15} /> Salvar</button>
             </div>
           </div>
@@ -1391,10 +1400,17 @@ function Precificar({ ing, emb, par, prod, cfg, costPerMinute, saveProd, editTar
 /* ------------------------------------------------------------------ */
 /*  PRODUTOS (catálogo / consulta de preços)                           */
 /* ------------------------------------------------------------------ */
-function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, goPrecificar, canEdit }) {
+function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, goPrecificar, canEdit, repo }) {
   const notify = useNotify();
   const [q, setQ] = useState("");
   const [fichaFor, setFichaFor] = useState(null);
+  const [histFor, setHistFor] = useState(null);
+  const [histRows, setHistRows] = useState(null);
+  const openHistory = async (p) => {
+    setHistFor(p); setHistRows(null);
+    try { setHistRows(await repo.getProductHistory(p.id)); }
+    catch (e) { notify("warn", "Não foi possível carregar o histórico: " + (e.message || "")); setHistFor(null); }
+  };
   const [confirmId, setConfirmId] = useState(null);
   const [filter, setFilter] = useState("todos");
   const [sort, setSort] = useState("nome");
@@ -1548,6 +1564,7 @@ function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, g
                       {canEdit && <button className="icon-btn" title="Editar precificação" onClick={() => onEdit(p)}><Pencil size={15} /></button>}
                       {canEdit && <button className="icon-btn" title="Duplicar produto" onClick={() => duplicate(p)}><Copy size={15} /></button>}
                       <button className="icon-btn" title="Ficha técnica" onClick={() => setFichaFor(p)}><FileText size={15} /></button>
+                      {canEdit && <button className="icon-btn" title="Histórico de preço" onClick={() => openHistory(p)}><TrendingUp size={15} /></button>}
                       {canEdit && (confirmId === p.id ? (
                         <>
                           <button className="icon-btn confirm-del" title="Confirmar exclusão" onClick={() => del(p.id)}><Check size={15} /></button>
@@ -1572,6 +1589,14 @@ function Produtos({ prod, ing, emb, par, cfg, costPerMinute, saveProd, onEdit, g
           cfg={cfg}
           onClose={() => setFichaFor(null)}
           onPrint={() => window.print()}
+        />
+      )}
+
+      {histFor && (
+        <HistoricoPreco
+          name={histFor.name || "Produto sem nome"}
+          rows={histRows}
+          onClose={() => { setHistFor(null); setHistRows(null); }}
         />
       )}
 
@@ -1946,6 +1971,79 @@ function ListaPrecos({ products, cfg, onClose, onPrint }) {
 /* ------------------------------------------------------------------ */
 /*  FICHA TÉCNICA (imprimível / PDF)                                   */
 /* ------------------------------------------------------------------ */
+function HistoricoPreco({ name, rows, onClose }) {
+  const loading = rows === null;
+  const empty = Array.isArray(rows) && rows.length === 0;
+  const fmtDate = (s) => {
+    if (!s) return "—";
+    const d = new Date(String(s).replace(" ", "T") + "Z");
+    return isNaN(d.getTime())
+      ? s
+      : d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+  };
+  let chart = null;
+  if (!loading && !empty) {
+    const W = 560, H = 170, pad = 30, nn = rows.length;
+    const xAt = (i) => (nn === 1 ? W / 2 : pad + (i * (W - 2 * pad)) / (nn - 1));
+    const saleOf = (r) => (r.salePrice === "" || r.salePrice == null ? null : Number(r.salePrice));
+    const pos = [];
+    rows.forEach((r) => { if (Number(r.suggestedUnit) > 0) pos.push(Number(r.suggestedUnit)); const s = saleOf(r); if (s != null && s > 0) pos.push(s); });
+    const max = pos.length ? Math.max(...pos) : 1;
+    const min = pos.length ? Math.min(...pos) : 0;
+    const yAt = (v) => H - pad - ((v - min) / (max - min || 1)) * (H - 2 * pad);
+    const line = (getter) => rows.map((r, i) => { const v = getter(r); return v == null || !(v > 0) ? null : xAt(i).toFixed(1) + "," + yAt(v).toFixed(1); }).filter(Boolean).join(" ");
+    const sugLine = line((r) => Number(r.suggestedUnit));
+    const saleLine = line(saleOf);
+    chart = (
+      <svg className="hist-chart" viewBox={"0 0 " + W + " " + H} width="100%" preserveAspectRatio="xMidYMid meet">
+        <line className="hist-axis" x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} />
+        {sugLine && <polyline className="hist-line sug" points={sugLine} fill="none" />}
+        {saleLine && <polyline className="hist-line sale" points={saleLine} fill="none" />}
+        {rows.map((r, i) => (Number(r.suggestedUnit) > 0 ? <circle key={"s" + i} className="hist-dot sug" cx={xAt(i)} cy={yAt(Number(r.suggestedUnit))} r="3.2" /> : null))}
+        {rows.map((r, i) => { const s = saleOf(r); return s != null && s > 0 ? <circle key={"v" + i} className="hist-dot sale" cx={xAt(i)} cy={yAt(s)} r="3.2" /> : null; })}
+      </svg>
+    );
+  }
+  return (
+    <div className="ficha-overlay hist-overlay" onClick={onClose}>
+      <div className="hist-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="hist-head">
+          <h3><TrendingUp size={18} /> Histórico de preço — {name}</h3>
+          <button className="btn ghost sm" onClick={onClose}><X size={15} /> Fechar</button>
+        </div>
+        {loading && <p className="muted" style={{ padding: "10px 2px" }}>Carregando…</p>}
+        {empty && <Empty text="Ainda não há histórico para este produto. Um registro é criado sempre que o custo, o preço sugerido, a margem ou o preço de venda mudam ao salvar." />}
+        {!loading && !empty && (
+          <>
+            <div className="hist-legend">
+              <span><i className="dot sug" /> Preço sugerido</span>
+              <span><i className="dot sale" /> Preço de venda</span>
+            </div>
+            {chart}
+            <div className="hist-tablewrap">
+              <table className="hist-table">
+                <thead><tr><th>Data</th><th>Autor</th><th className="r">Custo/un.</th><th className="r">Sugerido</th><th className="r">Venda</th><th className="r">Margem</th></tr></thead>
+                <tbody>
+                  {rows.slice().reverse().map((r, i) => (
+                    <tr key={i}>
+                      <td>{fmtDate(r.createdAt)}</td>
+                      <td>{r.author}</td>
+                      <td className="r">{brl(r.costPerUnit)}</td>
+                      <td className="r accent">{brl(r.suggestedUnit)}</td>
+                      <td className="r">{r.salePrice === "" || r.salePrice == null ? "—" : brl(r.salePrice)}</td>
+                      <td className="r">{Number(r.marginPct).toLocaleString("pt-BR")}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function FichaTecnica({ name, calc, cfg, onClose, onPrint }) {
   const today = new Date().toLocaleDateString("pt-BR", {
     day: "2-digit", month: "long", year: "numeric",
@@ -2304,11 +2402,19 @@ body{margin:0;font-family:'DM Sans',sans-serif;color:var(--ink);background:var(-
 }
 .tab:hover{color:var(--ink);background:#fff6ea;}
 .tab.on{background:var(--ink);color:#fbf3e7;box-shadow:var(--shadow);}
-@media (max-width:720px){
-  .head{flex-wrap:wrap;gap:12px 14px;}
+/* Quando a barra única não couber (≈1280px), empilha:
+   logo + avatar na 1ª linha; abas (com texto) na 2ª linha. */
+@media (max-width:1280px){
+  .head{flex-wrap:wrap;gap:12px 16px;}
   .brand{order:1;}
   .user-menu-wrap{order:2;margin-left:auto;}
-  .tabs{order:3;flex-basis:100%;flex-wrap:wrap;}
+  .tabs{order:3;flex-basis:100%;flex-wrap:wrap;justify-content:flex-start;}
+}
+/* Telas estreitas: abas só com ícones (quando o texto não caberia em 2 linhas). */
+@media (max-width:560px){
+  .tabs{gap:6px;}
+  .tab{padding:9px;gap:0;}
+  .tab-label{display:none;}
 }
 
 /* LAYOUT */
@@ -2706,7 +2812,29 @@ td.accent,.accent{color:var(--accent2);}
   position:fixed;inset:0;z-index:50;display:flex;justify-content:center;
   background:rgba(40,28,20,.55);backdrop-filter:blur(3px);overflow:auto;padding:28px 16px;
 }
-.ficha-scroll{width:100%;max-width:760px;display:flex;flex-direction:column;gap:14px;}
+.ficha-scroll{width:100%;max-width:760px;display:flex;flex-direction:column;gap:14px;};
+.hist-overlay{background:rgba(28,20,14,.72);backdrop-filter:blur(5px);}
+.hist-panel{width:100%;max-width:760px;align-self:flex-start;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 24px 70px -22px rgba(20,12,6,.6),0 2px 10px rgba(20,12,6,.18);padding:18px 20px 20px;display:flex;flex-direction:column;gap:14px;}
+.hist-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+.hist-head h3{font-family:'Fraunces',serif;font-size:17px;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:8px;margin:0;}
+.hist-legend{display:flex;gap:18px;font-size:12.5px;color:var(--ink2);}
+.hist-legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle;}
+.hist-legend i.sug{background:var(--accent);}
+.hist-legend i.sale{background:var(--green);}
+.hist-chart{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:8px;}
+.hist-axis{stroke:var(--line);stroke-width:1;}
+.hist-line{stroke-width:2;stroke-linejoin:round;stroke-linecap:round;}
+.hist-line.sug{stroke:var(--accent);}
+.hist-line.sale{stroke:var(--green);}
+.hist-dot.sug{fill:var(--accent);}
+.hist-dot.sale{fill:var(--green);}
+.hist-tablewrap{overflow:auto;max-height:340px;}
+.hist-table{width:100%;border-collapse:collapse;font-size:13px;}
+.hist-table th{position:sticky;top:0;background:var(--card);text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink2);font-weight:700;padding:0 6px 7px;border-bottom:1px solid var(--line);}
+.hist-table th.r,.hist-table td.r{text-align:right;}
+.hist-table td{padding:7px 6px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;color:var(--ink);}
+.hist-table td.accent{color:var(--accent);font-weight:600;}
+.hist-table tr:last-child td{border-bottom:none;}
 .ficha-toolbar{
   display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
   background:var(--card);border:1px solid var(--line);border-radius:13px;
