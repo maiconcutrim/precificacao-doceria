@@ -1,5 +1,6 @@
 import {
   n,
+  unitCost,
   computeProduct,
   validateItem,
   validateProduct,
@@ -105,6 +106,21 @@ export function registerDataRoutes(app, db, auth) {
                           WHERE h.product_id = ? ORDER BY h.id ASC`),
     insHist: db.prepare(`INSERT INTO price_history (product_id,product_name,cost_per_unit,suggested_unit,margin_pct,sale_price,inputs_json,created_by)
       VALUES (?,?,?,?,?,?,?,?)`),
+    lastInputHist: db.prepare("SELECT unit_cost, package_value, package_qty FROM input_history WHERE kind=? AND item_id=? ORDER BY id DESC LIMIT 1"),
+    insInputHist: db.prepare(`INSERT INTO input_history (kind,item_id,name,package_value,package_qty,unit,unit_cost,created_by)
+      VALUES (?,?,?,?,?,?,?,?)`),
+    listInputHist: db.prepare(`SELECT h.created_at, h.package_value, h.package_qty, h.unit, h.unit_cost,
+                                      u.display_name AS author_name, u.username AS author_username
+                               FROM input_history h LEFT JOIN users u ON u.id = h.created_by
+                               WHERE h.kind=? AND h.item_id=? ORDER BY h.id ASC`),
+    allHist: db.prepare("SELECT product_id, product_name, cost_per_unit, suggested_unit, margin_pct, sale_price, inputs_json, created_at, created_by FROM price_history ORDER BY id ASC"),
+    allInputHist: db.prepare("SELECT kind, item_id, name, package_value, package_qty, unit, unit_cost, created_at, created_by FROM input_history ORDER BY id ASC"),
+    insHistFull: db.prepare(`INSERT INTO price_history (product_id,product_name,cost_per_unit,suggested_unit,margin_pct,sale_price,inputs_json,created_at,created_by)
+      VALUES (@product_id,@product_name,@cost_per_unit,@suggested_unit,@margin_pct,@sale_price,@inputs_json,@created_at,@created_by)`),
+    insInputHistFull: db.prepare(`INSERT INTO input_history (kind,item_id,name,package_value,package_qty,unit,unit_cost,created_at,created_by)
+      VALUES (@kind,@item_id,@name,@package_value,@package_qty,@unit,@unit_cost,@created_at,@created_by)`),
+    clearHist: db.prepare("DELETE FROM price_history"),
+    clearInputHist: db.prepare("DELETE FROM input_history"),
   };
 
   /* apaga ids que não estão mais na lista recebida (remoções feitas no app) */
@@ -116,17 +132,30 @@ export function registerDataRoutes(app, db, auth) {
     for (const id of toDelete) del.run(id);
   }
 
-  const writeIngredients = db.transaction((list) => {
+  /* registra um instantâneo de custo do insumo — só quando o custo unitário (ou valor/qtd) muda */
+  function recordInputHist(kind, x, userId, defUnit) {
+    const value = n(x.packageValue), qty = n(x.packageQty), uc = unitCost(x);
+    const last = stmt.lastInputHist.get(kind, x.id);
+    const same = last &&
+      Math.abs(last.unit_cost - uc) <= 1e-6 &&
+      Math.abs(last.package_value - value) <= 1e-6 &&
+      Math.abs(last.package_qty - qty) <= 1e-6;
+    if (!same) stmt.insInputHist.run(kind, x.id, String(x.name || ""), value, qty, x.unit || defUnit, uc, userId || null);
+  }
+
+  const writeIngredients = db.transaction((list, userId) => {
     deleteMissing("ingredients", list.map((x) => x.id));
     for (const x of list) {
       stmt.upsertIng.run({ id: x.id, name: String(x.name || ""), value: n(x.packageValue), qty: n(x.packageQty), unit: x.unit || "g", active: x.active === false ? 0 : 1 });
+      recordInputHist("ingredient", x, userId, "g");
     }
   });
 
-  const writePackaging = db.transaction((list) => {
+  const writePackaging = db.transaction((list, userId) => {
     deleteMissing("packaging", list.map((x) => x.id));
     for (const x of list) {
       stmt.upsertPack.run({ id: x.id, name: String(x.name || ""), value: n(x.packageValue), qty: n(x.packageQty), unit: x.unit || "un", active: x.active === false ? 0 : 1 });
+      recordInputHist("packaging", x, userId, "un");
     }
   });
 
@@ -213,6 +242,18 @@ export function registerDataRoutes(app, db, auth) {
     }));
   }
 
+  /* histórico de custo de um insumo (ingrediente/embalagem), cronológico, com autor */
+  function readInputHistory(kind, itemId) {
+    return stmt.listInputHist.all(kind, itemId).map((r) => ({
+      createdAt: r.created_at,
+      packageValue: r.package_value,
+      packageQty: r.package_qty,
+      unit: r.unit,
+      unitCost: r.unit_cost,
+      author: (r.author_name && r.author_name.trim()) || r.author_username || "—",
+    }));
+  }
+
   /* ---------------------------------------------------------------- */
   /*  Rotas                                                           */
   /* ---------------------------------------------------------------- */
@@ -224,11 +265,19 @@ export function registerDataRoutes(app, db, auth) {
     res.json(readProductHistory(req.params.id));
   });
 
+  app.get("/api/ingredients/:id/history", auth.requireAuth, auth.requireEditor, (req, res) => {
+    res.json(readInputHistory("ingredient", req.params.id));
+  });
+
+  app.get("/api/packaging/:id/history", auth.requireAuth, auth.requireEditor, (req, res) => {
+    res.json(readInputHistory("packaging", req.params.id));
+  });
+
   app.put("/api/ingredients", auth.requireAuth, auth.requireEditor, (req, res) => {
     const list = Array.isArray(req.body) ? req.body : [];
     const bad = list.find((x) => !validateItem(x).ok);
     if (bad) return res.status(400).json({ error: "Há ingrediente com nome, valor ou quantidade inválidos." });
-    try { writeIngredients(list); res.json(readState().ingredients); }
+    try { writeIngredients(list, req.user.id); res.json(readState().ingredients); }
     catch (err) { handleWriteError(err, res); }
   });
 
@@ -236,7 +285,7 @@ export function registerDataRoutes(app, db, auth) {
     const list = Array.isArray(req.body) ? req.body : [];
     const bad = list.find((x) => !validateItem(x).ok);
     if (bad) return res.status(400).json({ error: "Há embalagem com nome, valor ou quantidade inválidos." });
-    try { writePackaging(list); res.json(readState().packaging); }
+    try { writePackaging(list, req.user.id); res.json(readState().packaging); }
     catch (err) { handleWriteError(err, res); }
   });
 
@@ -263,11 +312,63 @@ export function registerDataRoutes(app, db, auth) {
 
   /* importação do backup JSON exportado pelo app (migração) */
   const importAll = db.transaction((d, userId) => {
-    if (Array.isArray(d.ingredientes)) writeIngredients(d.ingredientes);
-    if (Array.isArray(d.embalagens)) writePackaging(d.embalagens);
+    if (Array.isArray(d.ingredientes)) writeIngredients(d.ingredientes, userId);
+    if (Array.isArray(d.embalagens)) writePackaging(d.embalagens, userId);
     if (d.parametros) writeParameters(d.parametros);
     if (Array.isArray(d.produtos)) writeProducts(d.produtos, userId);
     if (d.config) writeConfig(d.config);
+    /* restaura o histórico exatamente como no backup — substitui o atual (inclusive os
+       pontos recém-gerados acima por writeProducts/insumos) */
+    if (Array.isArray(d.historicoPrecos)) {
+      stmt.clearHist.run();
+      for (const r of d.historicoPrecos) stmt.insHistFull.run({
+        product_id: r.product_id ?? null,
+        product_name: r.product_name ?? "",
+        cost_per_unit: Number(r.cost_per_unit) || 0,
+        suggested_unit: Number(r.suggested_unit) || 0,
+        margin_pct: Number(r.margin_pct) || 0,
+        sale_price: r.sale_price == null ? null : Number(r.sale_price),
+        inputs_json: typeof r.inputs_json === "string" ? r.inputs_json : JSON.stringify(r.inputs_json ?? {}),
+        created_at: r.created_at ?? new Date().toISOString(),
+        created_by: r.created_by ?? null,
+      });
+    }
+    if (Array.isArray(d.historicoInsumos)) {
+      stmt.clearInputHist.run();
+      for (const r of d.historicoInsumos) stmt.insInputHistFull.run({
+        kind: r.kind === "packaging" ? "packaging" : "ingredient",
+        item_id: r.item_id ?? null,
+        name: r.name ?? "",
+        package_value: Number(r.package_value) || 0,
+        package_qty: Number(r.package_qty) || 0,
+        unit: r.unit ?? "",
+        unit_cost: Number(r.unit_cost) || 0,
+        created_at: r.created_at ?? new Date().toISOString(),
+        created_by: r.created_by ?? null,
+      });
+    }
+  });
+
+  function exportAll() {
+    const s = readState();
+    return {
+      app: "Sou Mais Um Doce — Precificação",
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      data: {
+        ingredientes: s.ingredients,
+        embalagens: s.packaging,
+        parametros: s.parameters,
+        produtos: s.products,
+        config: s.config,
+        historicoPrecos: stmt.allHist.all(),
+        historicoInsumos: stmt.allInputHist.all(),
+      },
+    };
+  }
+
+  app.get("/api/export", auth.requireAuth, auth.requireAdmin, (_req, res) => {
+    res.json(exportAll());
   });
 
   app.post("/api/import", auth.requireAuth, auth.requireAdmin, (req, res) => {

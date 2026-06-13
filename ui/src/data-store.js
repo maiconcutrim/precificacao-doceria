@@ -66,8 +66,11 @@ export function createApiStore({ baseUrl, getToken, onUnauthorized } = {}) {
     saveConfig:      (obj)  => req("PUT", "/config", obj),
 
     getProductHistory: (id) => req("GET", `/products/${id}/history`),
+    getIngredientHistory: (id) => req("GET", `/ingredients/${id}/history`),
+    getPackagingHistory: (id) => req("GET", `/packaging/${id}/history`),
 
     /* migração: envia o backup JSON completo; o servidor reconcilia em transação */
+    exportData:      ()        => req("GET", "/export"),
     importAll:       (payload) => req("POST", "/import", payload),
 
     /* gestão de usuários (somente admin) */

@@ -5,11 +5,12 @@ import {
   X, Check, Sparkles, Layers, FileText, Printer,
   Settings, Upload, Building2, Pencil, Search,
   Copy, Download, AlertTriangle, ArrowUpDown, Receipt, ChevronDown, Home, LogOut,
+  BarChart3,
 } from "lucide-react";
 import { createApiStore } from "./data-store.js";
 import {
   n, money2, maskPhone, unitCost, ROUNDING_OPTIONS,
-  computeProduct, costPerMinute as calcCostPerMinute, WEEKS_PER_MONTH, MARGIN_MAX,
+  computeProduct, validateItem, validateProduct, costPerMinute as calcCostPerMinute, WEEKS_PER_MONTH, MARGIN_MAX,
 } from "@doceria/pricing-core";
 
 /* ------------------------------------------------------------------ */
@@ -392,45 +393,30 @@ function App({ token, user, onLogout, onUnauthorized }) {
   const packagingUsage = (id) => prod.filter((p) => (p.packs || []).some((pk) => pk.packagingId === id)).length;
 
   /* BACKUP — exportar tudo para um arquivo JSON */
-  const exportData = () => {
-    const payload = {
-      app: "Sou Mais Um Doce — Precificação",
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      data: { ingredientes: ing, embalagens: emb, parametros: par, produtos: prod, config: cfg },
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const stamp = new Date().toISOString().slice(0, 10);
-    a.href = url;
-    a.download = `backup-precificacao-${stamp}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    notify("ok", "Backup exportado com sucesso.");
+  const exportData = async () => {
+    try {
+      const payload = await repo.exportData();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `backup-precificacao-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      notify("ok", "Backup exportado com sucesso.");
+    } catch (err) {
+      notify("err", "Não foi possível exportar o backup.");
+    }
   };
 
   /* BACKUP — importar de um arquivo JSON (envia ao servidor, que reconcilia tudo) */
-  const importData = (file) =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        try {
-          const parsed = JSON.parse(e.target.result);
-          const d = parsed.data || parsed;
-          if (!d || typeof d !== "object") throw new Error("Estrutura inválida");
-          await repo.importAll(parsed);   // o servidor importa na ordem correta, em transação
-          await loadState();              // recarrega o estado já reconciliado
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      };
-      reader.onerror = () => reject(new Error("Falha ao ler o arquivo"));
-      reader.readAsText(file);
-    });
+  const importData = async (payload) => {
+    await repo.importAll(payload);   // o servidor importa na ordem correta, em transação
+    await loadState();               // recarrega o estado já reconciliado
+  };
 
   if (!ready)
     return (
@@ -477,6 +463,7 @@ function App({ token, user, onLogout, onUnauthorized }) {
             seed={ing.length === 0 ? loadSeed : null}
             usageOf={ingredientUsage}
             onDirty={setUnsaved}
+            repo={repo}
           />
         )}
         {view === "embalagens" && canEdit && (
@@ -489,6 +476,7 @@ function App({ token, user, onLogout, onUnauthorized }) {
             seed={emb.length === 0 ? loadSeed : null}
             usageOf={packagingUsage}
             onDirty={setUnsaved}
+            repo={repo}
           />
         )}
         {view === "parametros" && isAdmin && (
@@ -627,16 +615,40 @@ function Inicio({ ing, emb, par, prod, cfg, costPerMinute, goTo, onEditProduct, 
   const ativos = prod.filter((p) => p.status !== "inativo").length;
   const inativos = prod.length - ativos;
 
-  const flagged = prod
-    .map((p) => ({ p, calc: computeProduct(p, { ingredients: ing, packaging: emb, params: par, cpm: costPerMinute }) }))
+  const pct = (v) => (v * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%";
+  const calcs = prod.map((p) => ({ p, calc: computeProduct(p, { ingredients: ing, packaging: emb, params: par, cpm: costPerMinute }) }));
+  const activeCalcs = calcs.filter(({ p }) => p.status !== "inativo");
+  const target = Math.min(Math.max(n(par.marginPct), 0), MARGIN_MAX) / 100;
+
+  /* alertas (apenas produtos ativos), do mais grave ao mais brando */
+  const flagged = activeCalcs
     .map(({ p, calc }) => {
       let reason = null;
       if (calc.suggestedUnit <= 0) reason = "precificação incompleta";
       else if (calc.orphanIng + calc.orphanPack > 0) reason = "usa item removido do cadastro";
       else if (calc.sale > 0 && calc.sale < calc.costPerUnit) reason = "vendendo abaixo do custo";
+      else if (calc.sale > 0 && calc.sale < calc.suggestedUnit) reason = "preço abaixo do sugerido";
+      else if (calc.sale <= 0) reason = "preço de venda não definido";
       return reason ? { p, reason } : null;
     })
     .filter(Boolean);
+
+  /* indicadores de margem (somente edição/admin) */
+  const sugCalcs = activeCalcs.filter(({ calc }) => calc.suggestedUnit > 0);
+  const withSale = sugCalcs.filter(({ calc }) => calc.sale > 0);
+  const avgSuggested = sugCalcs.length ? sugCalcs.reduce((s, { calc }) => s + calc.marginAtSuggested, 0) / sugCalcs.length : null;
+  const avgReal = withSale.length ? withSale.reduce((s, { calc }) => s + calc.realMargin, 0) / withSale.length : null;
+  const tier = { healthy: 0, below: 0, loss: 0, nosale: 0 };
+  sugCalcs.forEach(({ calc }) => {
+    if (calc.sale <= 0) tier.nosale++;
+    else if (calc.sale < calc.costPerUnit) tier.loss++;
+    else if (calc.realMargin < target) tier.below++;
+    else tier.healthy++;
+  });
+  const ranked = sugCalcs
+    .map((c) => ({ ...c, eff: c.calc.sale > 0 ? { price: c.calc.sale, margin: c.calc.realMargin } : { price: c.calc.suggestedUnit, margin: c.calc.marginAtSuggested } }))
+    .filter((c) => c.eff.price > 0)
+    .sort((a, b) => b.eff.margin - a.eff.margin);
 
   const greeting = cfg?.bizName ? cfg.bizName : "Bem-vinda ao seu ateliê de preços";
 
@@ -694,6 +706,60 @@ function Inicio({ ing, emb, par, prod, cfg, costPerMinute, goTo, onEditProduct, 
         </button>
       </div>
 
+      {/* MARGENS E RENTABILIDADE (edição/admin) */}
+      {canEdit && sugCalcs.length > 0 && (
+        <div className="card">
+          <h3 className="card-h"><TrendingUp size={16} /> Margens e rentabilidade</h3>
+          <div className="dash-stats">
+            <div className="dash-stat static">
+              <span className="ds-label">Margem média (sugerido)</span>
+              <span className="ds-value">{avgSuggested == null ? "—" : pct(avgSuggested)}</span>
+              <span className="ds-foot">{sugCalcs.length} produto(s) ativo(s)</span>
+            </div>
+            <div className="dash-stat static">
+              <span className="ds-label">Margem média (preço de venda)</span>
+              <span className="ds-value">{avgReal == null ? "—" : pct(avgReal)}</span>
+              <span className="ds-foot">{withSale.length} com preço definido</span>
+            </div>
+            <div className="dash-stat static">
+              <span className="ds-label">Margem-alvo</span>
+              <span className="ds-value">{pct(target)}</span>
+              <span className="ds-foot">definida nos parâmetros</span>
+            </div>
+          </div>
+          <div className="tier-row">
+            <span className="tier ok">{tier.healthy} no alvo</span>
+            <span className="tier warn">{tier.below} abaixo do alvo</span>
+            <span className="tier bad">{tier.loss} com prejuízo</span>
+            <span className="tier">{tier.nosale} sem preço de venda</span>
+          </div>
+        </div>
+      )}
+
+      {/* MARGEM POR PRODUTO (edição/admin) */}
+      {canEdit && ranked.length > 0 && (
+        <div className="card">
+          <h3 className="card-h"><BarChart3 size={16} /> Margem por produto</h3>
+          <p className="mini-note" style={{ marginTop: 0, marginBottom: 12 }}>Ordenado pela margem no preço praticado (ou no sugerido, quando não há preço de venda definido).</p>
+          <div className="rank-list">
+            {ranked.map(({ p, eff }) => {
+              const cls = eff.margin < 0 ? "bad" : eff.margin < target ? "warn" : "ok";
+              const w = Math.max(2, Math.min(100, eff.margin * 100));
+              return (
+                <button key={p.id} className="rank-row" onClick={() => onEditProduct(p)}>
+                  <span className="rank-main">
+                    <span className="rank-name">{p.name || "(sem nome)"}</span>
+                    <span className="rank-bar"><i className={cls} style={{ width: w + "%" }} /></span>
+                  </span>
+                  <span className={"rank-val " + cls}>{pct(eff.margin)}</span>
+                  <span className="rank-price">{brl(eff.price)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* PRODUTOS QUE MERECEM ATENÇÃO */}
       {prod.length > 0 && (
         <div className="card">
@@ -702,12 +768,17 @@ function Inicio({ ing, emb, par, prod, cfg, costPerMinute, goTo, onEditProduct, 
             <div className="attn-ok"><Check size={16} /> Nenhum produto com alerta. Tudo certo por aqui!</div>
           ) : (
             <div className="attn-list">
-              {flagged.map(({ p, reason }) => (
+              {flagged.map(({ p, reason }) => canEdit ? (
                 <button key={p.id} className="attn-row" onClick={() => onEditProduct(p)}>
                   <span className="attn-name">{p.name || "(sem nome)"}</span>
                   <span className="attn-reason">{reason}</span>
                   <Pencil size={14} />
                 </button>
+              ) : (
+                <div key={p.id} className="attn-row static">
+                  <span className="attn-name">{p.name || "(sem nome)"}</span>
+                  <span className="attn-reason">{reason}</span>
+                </div>
               ))}
             </div>
           )}
@@ -720,9 +791,18 @@ function Inicio({ ing, emb, par, prod, cfg, costPerMinute, goTo, onEditProduct, 
 /* ------------------------------------------------------------------ */
 /*  CADASTRO genérico (ingredientes / embalagens)                      */
 /* ------------------------------------------------------------------ */
-function Cadastro({ title, icon, data, save, unitOptions, qtyLabel, nameLabel, seed, usageOf, onDirty }) {
+function Cadastro({ title, icon, data, save, unitOptions, qtyLabel, nameLabel, seed, usageOf, onDirty, repo }) {
   const notify = useNotify();
   const isIng = title === "Ingredientes";
+  const [histFor, setHistFor] = useState(null);
+  const [histRows, setHistRows] = useState(null);
+  const openHistory = async (row) => {
+    setHistFor(row); setHistRows(null);
+    try {
+      const fn = isIng ? repo.getIngredientHistory : repo.getPackagingHistory;
+      setHistRows(await fn(row.id));
+    } catch (e) { notify("warn", "Não foi possível carregar o histórico: " + (e.message || "")); setHistFor(null); }
+  };
   const blank = { name: "", packageValue: "", packageQty: "", unit: unitOptions[0] };
   const [form, setForm] = useState(blank);
   const [confirmDel, setConfirmDel] = useState(null);
@@ -743,12 +823,8 @@ function Cadastro({ title, icon, data, save, unitOptions, qtyLabel, nameLabel, s
   const moneyFmt = money2;
 
   const add = () => {
-    const errs = {
-      name: !form.name.trim(),
-      packageValue: n(form.packageValue) <= 0,
-      packageQty: n(form.packageQty) <= 0,
-    };
-    if (errs.name || errs.packageValue || errs.packageQty) {
+    const { ok, errors: errs } = validateItem(form);
+    if (!ok) {
       setErrors(errs);
       notify("warn", "Preencha nome, valor e quantidade da embalagem.");
       return;
@@ -768,12 +844,8 @@ function Cadastro({ title, icon, data, save, unitOptions, qtyLabel, nameLabel, s
   const cancelEdit = () => { setEditingId(null); setRowDraft(null); setRowErrors({}); };
   const editRow = (patch) => { setRowDraft((d) => ({ ...d, ...patch })); setRowErrors({}); };
   const saveEdit = () => {
-    const errs = {
-      name: !rowDraft.name.trim(),
-      packageValue: n(rowDraft.packageValue) <= 0,
-      packageQty: n(rowDraft.packageQty) <= 0,
-    };
-    if (errs.name || errs.packageValue || errs.packageQty) {
+    const { ok, errors: errs } = validateItem(rowDraft);
+    if (!ok) {
       setRowErrors(errs);
       notify("warn", "Preencha nome, valor e quantidade da embalagem.");
       return;
@@ -878,6 +950,7 @@ function Cadastro({ title, icon, data, save, unitOptions, qtyLabel, nameLabel, s
                         ) : (
                           <>
                             <button className="icon-btn" title="Editar" onClick={() => startEdit(x)}><Pencil size={15} /></button>
+                            <button className="icon-btn" title="Histórico de custo" onClick={() => openHistory(x)}><TrendingUp size={15} /></button>
                             <button className="icon-btn del-btn" title="Excluir" onClick={() => tryDel(x.id)}><Trash2 size={15} /></button>
                           </>
                         )}
@@ -889,6 +962,15 @@ function Cadastro({ title, icon, data, save, unitOptions, qtyLabel, nameLabel, s
             </tbody>
           </table>
         </div>
+      )}
+
+      {histFor && (
+        <HistoricoInsumo
+          name={histFor.name || (isIng ? "Ingrediente sem nome" : "Embalagem sem nome")}
+          unitLabel={histFor.unit || ""}
+          rows={histRows}
+          onClose={() => { setHistFor(null); setHistRows(null); }}
+        />
       )}
     </div>
   );
@@ -1186,14 +1268,9 @@ function Precificar({ ing, emb, par, prod, cfg, costPerMinute, saveProd, editTar
   const save = () => {
     const hasIngredient = (p.items || []).some((it) => it.ingredientId && n(it.qty) > 0);
     const packMissingQty = (p.packs || []).some((pk) => pk.packagingId && n(pk.qty) <= 0);
-    const errs = {
-      name: !p.name.trim(),
-      items: !hasIngredient,
-      yield: n(p.yield) <= 0,
-      minutes: n(p.minutes) <= 0,
-      packs: packMissingQty,
-    };
-    if (errs.name || errs.items || errs.yield || errs.minutes || errs.packs) {
+    const base = validateProduct(p);
+    const errs = { ...base.errors, packs: packMissingQty };
+    if (!base.ok || errs.packs) {
       setPerr(errs);
       const missing = [];
       if (errs.name) missing.push("nome");
@@ -1624,6 +1701,7 @@ function Configuracoes({ cfg, save, onExport, onImport, counts, onDirty, repo, c
   useEffect(() => { onDirty && onDirty(dirty); return () => onDirty && onDirty(false); }, [dirty]);
 
   const [impMsg, setImpMsg] = useState(null);
+  const [pendingImport, setPendingImport] = useState(null);
   const onFile = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1635,11 +1713,35 @@ function Configuracoes({ cfg, save, onExport, onImport, counts, onDirty, repo, c
   const onDiscard = () => { setDraft(cfg); notify("warn", "Alterações descartadas."); };
   const onBackupFile = (e) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    onImport(file)
-      .then(() => { setImpMsg({ ok: true, text: "Backup importado com sucesso. Seus dados foram restaurados." }); notify("ok", "Backup importado com sucesso."); })
-      .catch(() => { setImpMsg({ ok: false, text: "Não foi possível ler este arquivo. Verifique se é um backup válido (.json)." }); notify("err", "Falha ao importar o backup."); });
     e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target.result);
+        const d = parsed.data || parsed;
+        if (!d || typeof d !== "object") throw new Error("inválido");
+        setImpMsg(null);
+        setPendingImport({
+          name: file.name,
+          payload: parsed,
+          counts: { ing: (d.ingredientes || []).length, emb: (d.embalagens || []).length, prod: (d.produtos || []).length },
+        });
+      } catch {
+        setPendingImport(null);
+        setImpMsg({ ok: false, text: "Não foi possível ler este arquivo. Verifique se é um backup válido (.json)." });
+        notify("err", "Arquivo de backup inválido.");
+      }
+    };
+    reader.onerror = () => { setImpMsg({ ok: false, text: "Falha ao ler o arquivo." }); };
+    reader.readAsText(file);
+  };
+  const confirmImport = () => {
+    const p = pendingImport;
+    setPendingImport(null);
+    onImport(p.payload)
+      .then(() => { setImpMsg({ ok: true, text: "Backup importado com sucesso. Seus dados foram restaurados." }); notify("ok", "Backup importado com sucesso."); })
+      .catch(() => { setImpMsg({ ok: false, text: "Não foi possível importar este backup. Verifique se o arquivo é válido." }); notify("err", "Falha ao importar o backup."); });
   };
 
   return (
@@ -1741,8 +1843,18 @@ function Configuracoes({ cfg, save, onExport, onImport, counts, onDirty, repo, c
           </label>
         </div>
         <p className="logo-hint" style={{ marginTop: 12 }}>
-          Importar substitui os dados atuais pelos do arquivo. Convém exportar um backup antes de importar outro.
+          O backup inclui ingredientes, embalagens, parâmetros, produtos, configurações e todo o histórico de preços e custos. Importar substitui os dados atuais pelos do arquivo — convém exportar um backup antes.
         </p>
+        {pendingImport && (
+          <div className="imp-confirm">
+            <p><AlertTriangle size={15} /> <b>Restaurar o backup “{pendingImport.name}”?</b></p>
+            <p>Isto vai <b>substituir todos os dados atuais</b> (ingredientes, embalagens, parâmetros, produtos, configurações e histórico) pelos do arquivo: {pendingImport.counts.ing} ingredientes, {pendingImport.counts.emb} embalagens e {pendingImport.counts.prod} produtos. Esta ação não pode ser desfeita.</p>
+            <div className="backup-actions">
+              <button className="btn ghost sm" onClick={() => setPendingImport(null)}>Cancelar</button>
+              <button className="btn danger sm" onClick={confirmImport}><Upload size={15} /> Confirmar restauração</button>
+            </div>
+          </div>
+        )}
         {impMsg && (
           <div className={"imp-msg " + (impMsg.ok ? "ok" : "err")}>
             {impMsg.ok ? <Check size={15} /> : <AlertTriangle size={15} />} {impMsg.text}
@@ -1971,6 +2083,68 @@ function ListaPrecos({ products, cfg, onClose, onPrint }) {
 /* ------------------------------------------------------------------ */
 /*  FICHA TÉCNICA (imprimível / PDF)                                   */
 /* ------------------------------------------------------------------ */
+function HistoricoInsumo({ name, unitLabel, rows, onClose }) {
+  const loading = rows === null;
+  const empty = Array.isArray(rows) && rows.length === 0;
+  const fmtDate = (s) => {
+    if (!s) return "—";
+    const d = new Date(String(s).replace(" ", "T") + "Z");
+    return isNaN(d.getTime()) ? s : d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+  };
+  let chart = null;
+  if (!loading && !empty) {
+    const W = 560, H = 170, pad = 30, nn = rows.length;
+    const xAt = (i) => (nn === 1 ? W / 2 : pad + (i * (W - 2 * pad)) / (nn - 1));
+    const pos = rows.map((r) => Number(r.unitCost)).filter((v) => v > 0);
+    const max = pos.length ? Math.max(...pos) : 1;
+    const min = pos.length ? Math.min(...pos) : 0;
+    const yAt = (v) => H - pad - ((v - min) / (max - min || 1)) * (H - 2 * pad);
+    const pts = rows.map((r, i) => { const v = Number(r.unitCost); return v > 0 ? xAt(i).toFixed(1) + "," + yAt(v).toFixed(1) : null; }).filter(Boolean).join(" ");
+    chart = (
+      <svg className="hist-chart" viewBox={"0 0 " + W + " " + H} width="100%" preserveAspectRatio="xMidYMid meet">
+        <line className="hist-axis" x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} />
+        {pts && <polyline className="hist-line sug" points={pts} fill="none" />}
+        {rows.map((r, i) => (Number(r.unitCost) > 0 ? <circle key={i} className="hist-dot sug" cx={xAt(i)} cy={yAt(Number(r.unitCost))} r="3.2" /> : null))}
+      </svg>
+    );
+  }
+  const unitTxt = unitLabel ? "/" + unitLabel : "";
+  return (
+    <div className="ficha-overlay hist-overlay" onClick={onClose}>
+      <div className="hist-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="hist-head">
+          <h3><TrendingUp size={18} /> Histórico de custo — {name}</h3>
+          <button className="btn ghost sm" onClick={onClose}><X size={15} /> Fechar</button>
+        </div>
+        {loading && <p className="muted" style={{ padding: "10px 2px" }}>Carregando…</p>}
+        {empty && <Empty text="Ainda não há histórico para este item. Um registro é criado sempre que o custo unitário muda ao salvar." />}
+        {!loading && !empty && (
+          <>
+            <div className="hist-legend"><span><i className="dot sug" /> Custo por {unitLabel || "unidade"}</span></div>
+            {chart}
+            <div className="hist-tablewrap">
+              <table className="hist-table">
+                <thead><tr><th>Data</th><th>Autor</th><th className="r">Valor</th><th className="r">Qtd</th><th className="r">Custo/un.</th></tr></thead>
+                <tbody>
+                  {rows.slice().reverse().map((r, i) => (
+                    <tr key={i}>
+                      <td>{fmtDate(r.createdAt)}</td>
+                      <td>{r.author}</td>
+                      <td className="r">{brl(r.packageValue)}</td>
+                      <td className="r">{Number(r.packageQty).toLocaleString("pt-BR")} {r.unit}</td>
+                      <td className="r accent">{brl(r.unitCost)}{unitTxt}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function HistoricoPreco({ name, rows, onClose }) {
   const loading = rows === null;
   const empty = Array.isArray(rows) && rows.length === 0;
@@ -2275,7 +2449,7 @@ function Empty({ text, action, big }) {
 function Style() {
   return (
     <style>{`
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=DM+Sans:wght@400;500;600;700&display=swap');
+/* Fontes 'Fraunces' e 'DM Sans' embutidas via @fontsource (ver main.jsx) — funcionam offline */
 
 :root{
   --bg:#F7F0E6; --bg2:#FBF6EE; --ink:#3A2A20; --ink2:#7A6557;
@@ -2667,6 +2841,33 @@ td.accent,.accent{color:var(--accent2);}
 .attn-name{flex:1;font-weight:600;font-size:14px;color:var(--ink);}
 .attn-reason{font-size:12px;font-weight:600;color:var(--accent2);background:#fdf0e6;border:1px solid #f0cfae;border-radius:20px;padding:2px 10px;}
 .attn-row svg{color:#b9a695;}
+/* PAINEL — margens e ranking */
+.dash-stat.static{cursor:default;box-shadow:none;}
+.dash-stat.static:hover{transform:none;border-color:var(--line);}
+.tier-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;}
+.tier{font-size:12px;font-weight:600;padding:5px 11px;border-radius:999px;border:1px solid var(--line);color:var(--ink2);}
+.tier.ok{color:var(--green);border-color:#bcd0b2;background:rgba(94,125,82,.08);}
+.tier.warn{color:#9a7a2e;border-color:#e6d09a;background:rgba(201,154,63,.12);}
+.tier.bad{color:var(--red);border-color:#e3b3a9;background:rgba(177,74,58,.08);}
+.rank-list{display:flex;flex-direction:column;}
+.rank-row{display:grid;grid-template-columns:minmax(0,1fr) 60px 84px;align-items:center;gap:12px;width:100%;text-align:left;
+  background:transparent;border:none;border-bottom:1px solid var(--line);padding:10px 4px;cursor:pointer;font-family:inherit;color:var(--ink);transition:.14s;}
+.rank-row:last-child{border-bottom:none;}
+.rank-row:hover{background:var(--bg2);}
+.rank-main{display:flex;flex-direction:column;gap:6px;min-width:0;}
+.rank-name{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.rank-bar{height:7px;border-radius:999px;background:var(--line);overflow:hidden;}
+.rank-bar i{display:block;height:100%;border-radius:999px;}
+.rank-bar i.ok{background:var(--green);}
+.rank-bar i.warn{background:var(--gold);}
+.rank-bar i.bad{background:var(--red);}
+.rank-val{font-size:13px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink);}
+.rank-val.ok{color:var(--green);}
+.rank-val.warn{color:#9a7a2e;}
+.rank-val.bad{color:var(--red);}
+.rank-price{font-size:12.5px;color:var(--ink2);text-align:right;font-variant-numeric:tabular-nums;}
+.attn-row.static{cursor:default;}
+.attn-row.static:hover{background:transparent;}
 
 /* MODAL (confirmação de saída) */
 .modal-overlay{position:fixed;inset:0;z-index:70;background:rgba(40,28,20,.55);backdrop-filter:blur(3px);
@@ -2796,6 +2997,10 @@ td.accent,.accent{color:var(--accent2);}
 
 /* BACKUP */
 .backup-actions{display:flex;gap:10px;flex-wrap:wrap;}
+.imp-confirm{margin-top:14px;padding:14px 16px;border:1px solid var(--gold);background:#FBF1DC;border-radius:10px;color:var(--ink);font-size:13.5px;display:flex;flex-direction:column;gap:10px;}
+.imp-confirm p{margin:0;line-height:1.5;display:flex;gap:6px;align-items:flex-start;}
+.btn.danger{background:var(--red);color:#fff;border-color:var(--red);}
+.btn.danger:hover{filter:brightness(1.06);}
 .imp-msg{display:flex;align-items:center;gap:8px;margin-top:14px;padding:11px 14px;border-radius:11px;font-size:13.5px;}
 .imp-msg.ok{background:#e7f0e1;color:#42603a;border:1px solid #cfe0c4;}
 .imp-msg.err{background:#fbe9e4;color:#9a3a2a;border:1px solid #f0c8bd;}

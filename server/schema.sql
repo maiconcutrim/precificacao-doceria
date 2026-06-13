@@ -166,3 +166,19 @@ CREATE TABLE IF NOT EXISTS price_history (
   created_by     INTEGER REFERENCES users(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ph_product ON price_history(product_id, created_at);
+
+-- Histórico de custo de insumos (ingredientes e embalagens) — append-only; registra ao mudar o custo unitário.
+-- item_id é referência "fraca" (sem FK) para reter o histórico mesmo após a exclusão do item; o nome fica desnormalizado.
+CREATE TABLE IF NOT EXISTS input_history (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind          TEXT    NOT NULL CHECK (kind IN ('ingredient','packaging')),
+  item_id       TEXT,
+  name          TEXT    NOT NULL DEFAULT '',
+  package_value REAL    NOT NULL DEFAULT 0,
+  package_qty   REAL    NOT NULL DEFAULT 0,
+  unit          TEXT    NOT NULL DEFAULT '',
+  unit_cost     REAL    NOT NULL DEFAULT 0,
+  created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ih_item ON input_history(kind, item_id, created_at);
